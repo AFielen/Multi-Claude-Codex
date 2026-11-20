@@ -72,6 +72,15 @@ internal static class ManagerMenuChecks
 
     public static void Run(MainWindow window, Catalog catalog, string desktopFixture, Func<int> resourceSampleCount)
     {
+        using var warning = new ManagerWarningMonitor(window);
+        try { CheckMenu(window, catalog, desktopFixture, resourceSampleCount); }
+        finally { warning.ThrowIfShown(); }
+        Console.WriteLine("PASS localized tray menu, live profile order, targeted Open and Close, modal guards and stale actions");
+    }
+
+    private static void CheckMenu(MainWindow window, Catalog catalog, string desktopFixture, Func<int> resourceSampleCount)
+    {
+        Console.WriteLine("Checking tray menu entries and profile order");
         window.Width = 920;
         window.UpdateLayout();
         var menu = window.ManagerMenu;
@@ -98,12 +107,14 @@ internal static class ManagerMenuChecks
             string fixture = Path.Combine(desktopFixture, "AnthropicClaude", "claude.exe");
             if (!DesktopWindows.SamePath(CodeLauncher.FindDesktop(), fixture))
                 throw new Exception("Tray checks require the temporary desktop recorder.");
+            Console.WriteLine("Checking tray Open for the second profile");
             target.DropDownItems[0].PerformClick();
             CheckRunner.PumpUntil(() => Directory.Exists(second.DesktopPath) &&
                 Directory.GetFiles(second.DesktopPath, "login-fixture-*.txt").Length == 1, "tray open of the second profile");
             if (catalog.Get("selected_code_key") != second.CodeKey || catalog.Profiles().Single(p => p.Id == second.Id).LastOpen == null)
                 throw new Exception("Tray Open did not select and record the requested profile.");
 
+            Console.WriteLine("Checking tray Close while the manager is hidden");
             SystemCommands.CloseWindow(window);
             CheckRunner.PumpUntil(() => !window.IsVisible, "hide the manager before starting a desktop");
             WaitForTrayStatus(menu, first, running: false);
@@ -131,6 +142,7 @@ internal static class ManagerMenuChecks
             }
             finally { if (!running.HasExited) { running.Kill(); running.WaitForExit(); } }
 
+            Console.WriteLine("Checking tray commands with an owned WPF window");
             var dialog = new Window { Owner = window, ShowInTaskbar = false, Width = 100, Height = 100 };
             try
             {
@@ -138,8 +150,10 @@ internal static class ManagerMenuChecks
                 CheckModalCommands(menu, first);
             }
             finally { dialog.Close(); }
+            Console.WriteLine("Checking tray commands with a native modal dialog");
             CheckNativeModal(window, first);
 
+            Console.WriteLine("Checking a stale tray action after profile replacement");
             Refresh(menu);
             var removed = catalog.Profiles().Single(profile => profile.Provider == ProfileProvider.Codex);
             var stale = ProfileEntry(menu, removed);
@@ -151,6 +165,5 @@ internal static class ManagerMenuChecks
                 throw new Exception("A stale tray action must never open a different profile reusing the same numeric ID.");
         }
         finally { Environment.SetEnvironmentVariable("LOCALAPPDATA", previousLocal); }
-        Console.WriteLine("PASS localized tray menu, live profile order, targeted Open and Close, modal guards and stale actions");
     }
 }
