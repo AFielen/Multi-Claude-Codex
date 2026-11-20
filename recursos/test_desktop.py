@@ -86,6 +86,8 @@ class DesktopWindowTests(unittest.TestCase):
                     self.assertIsNone(app.cfg_get("login_url"))
                     self.assertNotIn(b"claude://", Path(app.LOG).read_bytes() if Path(app.LOG).exists() else b"")
                 finally:
+                    for timer in ui.tk.splitlist(ui.tk.call("after", "info")):
+                        ui.after_cancel(timer)
                     ui.destroy()
 
 

@@ -1210,12 +1210,11 @@ class Janela(tk.Toplevel):
     def mostrar(self):
         self.update_idletasks()
         w, h = self._tam
-        w = max(w, self.winfo_reqwidth())
-        h = h or self.winfo_reqheight()
+        w = max(self.app.px(w), self.winfo_reqwidth())
+        h = max(self.app.px(h or 0), self.winfo_reqheight())
         x = self.app.winfo_rootx() + (self.app.winfo_width() - w) // 2
         y = self.app.winfo_rooty() + (self.app.winfo_height() - h) // 3
-        self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
-        self.minsize(min(w, 340), min(h, 200))
+        self.app.ajustar_janela(self, w, h, x, y, min(w, self.app.px(340)), min(h, self.app.px(200)))
         barra_titulo(self)
         self.deiconify()
         self.grab_set()
@@ -1279,12 +1278,12 @@ class App(tk.Tk):
             self.tema = "sistema"
         self.tema_efetivo = aplicar_tema(self.tema)
 
-        geo = cfg_get("geometria")
-        try:
-            self.geometry(geo or "640x680")
-        except tk.TclError:
-            self.geometry("640x680")
-        self.minsize(440, 480)
+        self.escala = self.winfo_fpixels("1i") / 96
+        # Convert Tk client dimensions to the outer size of a normal Windows window.
+        quadro = wt.RECT()
+        ctypes.windll.user32.AdjustWindowRectEx(ctypes.byref(quadro), 0x00CF0000, False, 0)  # WS_OVERLAPPEDWINDOW
+        self.moldura = (quadro.right - quadro.left, quadro.bottom - quadro.top)
+        self.restaurar_geometria(cfg_get("geometria"))
 
         # Sobrou modo login de uma execução anterior? Limpa.
         for c in ("login_pasta", "login_ok", "login_url"):
@@ -1300,6 +1299,50 @@ class App(tk.Tk):
     def t(self, chave, **kw):
         s = T[self.lang].get(chave, T["en"][chave])
         return s.format(**kw) if kw else s
+
+    def px(self, valor):
+        return round(valor * self.escala)
+
+    def area_trabalho(self, x, y, largura, altura):
+        """Área útil do monitor que contém a maior parte da janela salva."""
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("size", wt.DWORD), ("monitor", wt.RECT), ("work", wt.RECT), ("flags", wt.DWORD)]
+
+        user32 = ctypes.windll.user32
+        user32.MonitorFromRect.restype = wt.HANDLE
+        rect = wt.RECT(x, y, x + largura, y + altura)
+        monitor = user32.MonitorFromRect(ctypes.byref(rect), 2)  # MONITOR_DEFAULTTONEAREST
+        info = MonitorInfo()
+        info.size = ctypes.sizeof(info)
+        if monitor and user32.GetMonitorInfoW(wt.HANDLE(monitor), ctypes.byref(info)):
+            return info.work.left, info.work.top, info.work.right, info.work.bottom
+        return 0, 0, self.winfo_screenwidth(), self.winfo_screenheight()
+
+    def ajustar_janela(self, janela, w, h, x, y, min_w, min_h):
+        left, top, right, bottom = self.area_trabalho(x, y, w, h)
+        # Tk sizes the client area; leave space for the Windows frame and title bar.
+        max_w = max(1, right - left - self.moldura[0])
+        max_h = max(1, bottom - top - self.moldura[1])
+        min_w, min_h = min(min_w, max_w), min(min_h, max_h)
+        w, h = min(max(w, min_w), max_w), min(max(h, min_h), max_h)
+        x = max(left, min(x, left + max_w - w))
+        y = max(top, min(y, top + max_h - h))
+        janela.minsize(min_w, min_h)
+        janela.geometry(f"{w}x{h}+{x}+{y}")
+
+    def restaurar_geometria(self, valor):
+        w, h = self.px(640), self.px(680)
+        x, y = self.px(40), self.px(40)
+        m = re.fullmatch(r"(\d{1,6})x(\d{1,6})(?:([+-]-?\d{1,7})([+-]-?\d{1,7}))?", valor or "")
+        if m:
+            w, h = int(m[1]), int(m[2])
+            if (w, h) == (640, 680):
+                w, h = self.px(640), self.px(680)
+            if m[3]:
+                # Tk saves absolute negative positions as "+-N"; "-N" is an offset from the far edge.
+                x = int(m[3][1:]) if m[3][0] == "+" else self.winfo_screenwidth() - w + int(m[3]) - self.moldura[0]
+                y = int(m[4][1:]) if m[4][0] == "+" else self.winfo_screenheight() - h + int(m[4]) - self.moldura[1]
+        self.ajustar_janela(self, w, h, x, y, self.px(400), self.px(400))
 
     # ----- montagem -----
     def montar(self):
@@ -1340,7 +1383,7 @@ class App(tk.Tk):
         self.lbl_sub.pack(fill="x")
         textos.bind("<Configure>", lambda e: self.lbl_sub.config(wraplength=max(120, e.width)))
         topo.bind("<Configure>", lambda e: self.btn_novo.config(
-            text="+" if e.width < 520 else "+  " + self.t("novo")))
+            text="+" if e.width < self.px(520) else "+  " + self.t("novo")))
 
         if not self.claude:
             tk.Label(self, text="⚠  " + self.t("ausente"), bg=C["BG"], fg=C["VERMELHO"],
@@ -1350,21 +1393,29 @@ class App(tk.Tk):
         self.status = tk.Frame(self, bg=C["PAINEL"], highlightthickness=1, highlightbackground=C["ACCENT"])
         self.status_txt = tk.Label(self.status, bg=C["PAINEL"], fg=C["TEXTO"], font=(FONTE, 10),
                                    justify="left", anchor="w")
-        self.status_txt.pack(side="left", fill="x", expand=True, padx=14, pady=10)
+        self.status.columnconfigure(0, weight=1)
+        self.status_txt.grid(row=0, column=0, sticky="ew", padx=14, pady=10)
+        self.status_txt.bind("<Configure>", lambda e: self.status_txt.config(wraplength=max(1, e.width - 4)))
         self.status_btns = tk.Frame(self.status, bg=C["PAINEL"])
         Botao(self.status_btns, self.t("colar"), self.colar_link, tipo="primario", tamanho=9).pack(fill="x", pady=2)
         Botao(self.status_btns, self.t("cancelar"), self.cancelar_login, tamanho=9).pack(fill="x", pady=2)
-        self.status.bind("<Configure>", lambda e: self.status_txt.config(wraplength=max(200, e.width - 170)))
 
         # Rodapé com copyright
         rodape = tk.Frame(self, bg=C["BG"])
         rodape.pack(side="bottom", fill="x", padx=22, pady=(0, 10))
-        tk.Label(rodape, text=f"{APP} v{VERSAO} · Modified edition", bg=C["BG"], fg=C["SUB"],
-                 font=(FONTE, 8)).pack(side="left")
+        versao = tk.Label(rodape, text=f"{APP} v{VERSAO} · Modified edition", bg=C["BG"], fg=C["SUB"],
+                          font=(FONTE, 8))
+        versao.pack(side="left")
         link = tk.Label(rodape, text=ATRIBUICAO, bg=C["BG"], fg=C["ACCENT"], font=(FONTE, 8, "underline"),
                         cursor="hand2")
         link.pack(side="right")
         link.bind("<Button-1>", lambda e: webbrowser.open(GITHUB))
+        def dispor_rodape(evento):
+            lado = "left" if evento.width >= versao.winfo_reqwidth() + link.winfo_reqwidth() + 8 else "top"
+            if versao.winfo_manager() == "pack" and versao.pack_info().get("side") != lado:
+                versao.pack_configure(side=lado)
+                link.pack_configure(side="right" if lado == "left" else "top")
+        rodape.bind("<Configure>", dispor_rodape)
 
         self.corpo = Rolavel(self, C["BG"])
         self.corpo.pack(fill="both", expand=True, padx=(22, 16), pady=14)
@@ -1376,8 +1427,8 @@ class App(tk.Tk):
             self.mostrar_status(self.t("aguardando", n=self.login_perfil[1]), True)
 
     def _layout_para(self, largura):
-        colunas = 2 if largura >= 860 else 1
-        compacto = largura / colunas < 470
+        colunas = 2 if largura >= self.px(860) else 1
+        compacto = largura / colunas < self.px(560)
         return colunas, compacto
 
     def _ao_redimensionar(self, e):
@@ -1467,7 +1518,11 @@ class App(tk.Tk):
     def boas_vindas(self):
         j = Janela(self, APP, largura=500, altura=520)
         j.protocol("WM_DELETE_WINDOW", lambda: concluir())
-        corpo = tk.Frame(j, bg=C["PAINEL"])
+        botao = Botao(j, "", lambda: concluir(), tipo="primario")
+        botao.pack(side="bottom", fill="x", padx=26, pady=(8, 22))
+        rol = Rolavel(j, C["PAINEL"])
+        rol.pack(fill="both", expand=True)
+        corpo = tk.Frame(rol.dentro, bg=C["PAINEL"])
         corpo.pack(fill="both", expand=True, padx=26, pady=22)
         logo = tk.Canvas(corpo, width=64, height=64, bg=C["PAINEL"], highlightthickness=0)
         logo.pack()
@@ -1479,14 +1534,13 @@ class App(tk.Tk):
             logo.create_text(32, 32, text="✳", fill=C["ACCENT"], font=(FONTE, 30, "bold"))
         titulo = tk.Label(corpo, bg=C["PAINEL"], fg=C["TEXTO"], font=(FONTE, 16, "bold"))
         titulo.pack(pady=(10, 2))
-        sub = tk.Label(corpo, bg=C["PAINEL"], fg=C["SUB"], font=(FONTE, 10), wraplength=430, justify="center")
-        sub.pack(pady=(0, 14))
+        sub = tk.Label(corpo, bg=C["PAINEL"], fg=C["SUB"], font=(FONTE, 10), wraplength=self.px(430), justify="center")
+        sub.pack(fill="x", pady=(0, 14))
+        sub.bind("<Configure>", lambda e: sub.config(wraplength=max(1, e.width - 4)))
         grade = tk.Frame(corpo, bg=C["PAINEL"])
         grade.pack(fill="x")
         for col in (0, 1):
             grade.columnconfigure(col, weight=1, uniform="i")
-        botao = Botao(corpo, "", lambda: concluir(), tipo="primario")
-        botao.pack(fill="x", pady=(18, 0))
 
         def desenhar():
             titulo.config(text=self.t("bv_titulo"))
@@ -1765,7 +1819,8 @@ class App(tk.Tk):
 
         titulo = tk.Label(c, text=nome, bg=C["CARD"], fg=C["TEXTO"], font=(FONTE, 12, "bold"),
                           cursor="xterm", anchor="w")
-        titulo.grid(row=0, column=1, sticky="sw", pady=(14, 0))
+        titulo.grid(row=0, column=1, sticky="sew", pady=(14, 0))
+        titulo.bind("<Configure>", lambda e: titulo.config(wraplength=max(1, e.width - 4)))
         titulo.bind("<Double-Button-1>", lambda e: self.renomear(p))
         chips = tk.Frame(c, bg=C["CARD"])
         chips.grid(row=1, column=1, sticky="nw", pady=(4, 14))
@@ -1971,9 +2026,9 @@ class App(tk.Tk):
 
     def mostrar_status(self, texto, cancelavel):
         self.status_txt.config(text=texto)
-        self.status_btns.pack_forget()
+        self.status_btns.grid_remove()
         if cancelavel:
-            self.status_btns.pack(side="right", padx=10, pady=8)
+            self.status_btns.grid(row=0, column=1, padx=10, pady=8)
         self.status.pack(fill="x", padx=22, pady=(14, 0), before=self.corpo)
 
     def esconder_status(self):
