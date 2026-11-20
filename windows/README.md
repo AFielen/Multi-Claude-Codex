@@ -1,8 +1,8 @@
-# Multi Claude Codex für Windows · WPF-Edition
+# MultiCloud Codex für Windows · WPF-Edition
 
-Diese Windows-Edition verwaltet Claude- und Codex-Konten. Die Download-Schaltflächen im Haupt-README führen zum veröffentlichten Claude-Original.
+Mit MultiCloud Codex lässt sich jedes Claude- oder Codex-Konto in einem eigenen Fenster öffnen. Das portable Paket lässt sich mit dem .NET-10-SDK aus diesem Repository bauen. [Build-Anleitung im Haupt-README](../README.md#build-and-start-on-windows)
 
-Based on Multi Claude, created by Richard KPL. Axel (AFielen) entwickelt und pflegt die Codex-Edition. Der C#-Port basiert auf der Python-Version 2.3.0, Stand `68a1bd07eddbf54eba8349323b0cc4ac5183c501`. [Originalprojekt](https://github.com/RichardKPL/multi-claude) · [Multi Claude Codex](https://github.com/AFielen/Multi-Claude-Codex)
+Based on Multi Claude, created by Richard KPL. Axel (AFielen) entwickelt und pflegt die Codex-Edition. Der C#-Port basiert auf der Python-Version 2.3.0, Stand `68a1bd07eddbf54eba8349323b0cc4ac5183c501`. [Originalprojekt](https://github.com/RichardKPL/multi-claude) · [MultiCloud Codex](https://github.com/AFielen/Multi-Claude-Codex)
 
 ## Start
 
@@ -19,7 +19,7 @@ Für einen Test direkt aus dem Repository legt dieser PowerShell-Aufruf den Kata
 & '.\dist\wpf-win-x64\Multi Claude.exe' --manager-home (Join-Path $env:TEMP 'multi-claude-wpf-testkatalog')
 ```
 
-Beim Minimieren oder Schließen über das **X** läuft Multi Claude Codex im Infobereich neben der Windows-Uhr weiter. Ein Klick auf das App-Symbol zeigt den Manager wieder an. Windows kann das Symbol unter dem Pfeil für ausgeblendete Symbole einsortieren. Per Rechtsklick lassen sich einzelne Profile öffnen, in den Vordergrund holen oder schließen. Über **Manager beenden** lässt sich die App vollständig schließen. Geöffnete Profilfenster laufen dabei weiter.
+Beim Minimieren oder Schließen über das **X** läuft MultiCloud Codex im Infobereich neben der Windows-Uhr weiter. Ein Klick auf das App-Symbol zeigt den Manager wieder an. Windows kann das Symbol unter dem Pfeil für ausgeblendete Symbole einsortieren. Per Rechtsklick lassen sich einzelne Profile öffnen, in den Vordergrund holen oder schließen. Über **Manager beenden** lässt sich die App vollständig schließen. Geöffnete Profilfenster laufen dabei weiter.
 
 Solange der Manager läuft, zeigt jedes geöffnete Claude-Desktop-Profil unten rechts auf seinem Taskleistensymbol einen Punkt in der Profilfarbe. Windows gruppiert die Fenster jedes Profils unter einem eigenen Symbol. Eine Änderung der Profilfarbe erscheint auch bei bereits geöffneten Fenstern. Der Punkt ist unabhängig von der Einstellung für den farbigen Fensterrahmen.
 
@@ -43,7 +43,7 @@ Die Prüfungen decken SQLite-Übernahme, Bearbeiten und Sortieren, Schutz extern
 
 ## Daten bei einem späteren Wechsel
 
-Sobald ein Katalog Codex-Profile enthält, diesen Katalog mit der Windows-Edition **Multi Claude Codex** öffnen. Frühere Manager-Versionen kennen den Anbietertyp noch nicht.
+Sobald ein Katalog Codex-Profile enthält, diesen Katalog mit der Windows-Edition **MultiCloud Codex** öffnen. Frühere Manager-Versionen kennen den Anbietertyp noch nicht.
 
 Der vorhandene 2.3.0-Katalog kann im selben Manager-Ordner weiterverwendet werden. Seine bestehenden Profile werden automatisch als Claude übernommen. `perfis.id`, `perfis.pasta` und `profile_options.code_key` bleiben den Profilen zugeordnet. Relative Desktop-Pfade beziehen sich weiterhin auf den Katalogordner. Der Start eines isolierten Claude-Profils verwendet `claude-code\<code_key>`. Die Auswahl, Fenstergeometrie, Sprache, Darstellung, Reihenfolge und letzte Öffnung werden in SQLite gespeichert. Windows-Verknüpfungen verwenden den ursprünglichen Katalog und die stabile Code-Kennung. Beim Start protokolliert der Manager seine Version in `log.txt` und entfernt die drei veralteten Einträge `login_pasta`, `login_ok` und `login_url` aus `config`, falls sie vorhanden sind.
 
