@@ -55,7 +55,9 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
                     string? command = Property(row, "CommandLine") as string;
                     if (string.IsNullOrEmpty(command))
                     {
-                        if (strict) throw new IOException($"Windows konnte eine laufende {provider}-Instanz nicht zuordnen.");
+                        // WMI can still enumerate a process after Windows has discarded its command line.
+                        if (strict && !WaitForReportedProcessExit(Convert.ToInt32(Property(row, "ProcessId"))))
+                            throw new IOException($"Windows konnte eine laufende {provider}-Instanz nicht zuordnen.");
                         continue;
                     }
                     string? folder = FolderFromCommand(command, strict);
@@ -75,6 +77,13 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
         snapshot = byFolder;
         observedByUtcTicks = beforeQuery;
         readAt = Environment.TickCount64;
+    }
+
+    private static bool WaitForReportedProcessExit(int pid)
+    {
+        using var handle = OpenProcess(0x100000 /* SYNCHRONIZE */, false, pid);
+        if (handle.IsInvalid) return Marshal.GetLastPInvokeError() == 87; // ERROR_INVALID_PARAMETER: PID no longer exists.
+        return WaitForSingleObject(handle, 3500) == 0; // WAIT_OBJECT_0: process has exited.
     }
 
     private static object? Property(dynamic row, string name)
@@ -244,7 +253,8 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
     private delegate bool EnumProc(nint hwnd, nint data);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern nint CommandLineToArgvW(string commandLine, out int count);
     [DllImport("kernel32.dll")] private static extern nint LocalFree(nint ptr);
-    [DllImport("kernel32.dll")] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
     [DllImport("kernel32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, uint flags, StringBuilder path, ref int size);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback, nint data);
