@@ -67,7 +67,8 @@ public partial class MainWindow
                         card.Children.Add(resources);
                         rowIndicators.Add(profile.CodeKey, (dot, caption, resources));
                         var item = new ListBoxItem { Tag = profile, Content = card, Padding = new Thickness(4), HorizontalContentAlignment = HorizontalAlignment.Stretch };
-                        AutomationProperties.SetName(item, profile.Name);
+                        item.ToolTip = ProfileLabel(profile);
+                        AutomationProperties.SetName(item, ProfileLabel(profile));
                         ProfileList.Items.Add(item);
                     }
                     renderedSidebar = profiles;
@@ -85,13 +86,13 @@ public partial class MainWindow
                     {
                         Content = PickerLabel(profile),
                         Padding = new Thickness(4, 2, 4, 2),
-                        ToolTip = profile.Name,
+                        ToolTip = ProfileLabel(profile),
                         HorizontalContentAlignment = HorizontalAlignment.Stretch,
                         Margin = new Thickness(0, 0, 2, 0)
                     };
                     if (profile.Id == selected?.Id) button.BorderBrush = ProfileColor(profile);
                     AutomationProperties.SetAutomationId(button, "QuickProfile_" + profile.Id);
-                    AutomationProperties.SetName(button, profile.Name);
+                    AutomationProperties.SetName(button, ProfileLabel(profile));
                     button.Click += (_, _) => Safe(() => SetSelection(profile));
                     QuickProfiles.Children.Add(button);
                 }
@@ -99,16 +100,20 @@ public partial class MainWindow
         }
         finally { rendering = false; }
     }
+    private static string ProfileLabel(Profile p) => $"{p.Name} · {p.Provider}";
     private DockPanel PickerLabel(Profile p)
     {
         var panel = new DockPanel();
         panel.Children.Add(new TextBlock { Text = "●", Foreground = ProfileColor(p), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 5, 0) });
-        panel.Children.Add(new TextBlock
+        var text = new StackPanel();
+        text.Children.Add(new TextBlock
         {
             Text = p.Name,
             TextTrimming = TextTrimming.CharacterEllipsis,
             FontWeight = selected?.Id == p.Id ? FontWeights.SemiBold : FontWeights.Normal
         });
+        text.Children.Add(new TextBlock { Text = p.Provider.ToString(), Style = (Style)FindResource("Caption") });
+        panel.Children.Add(text);
         return panel;
     }
     private void OnWindowKey(object sender, KeyEventArgs e)

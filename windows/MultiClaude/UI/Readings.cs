@@ -27,7 +27,8 @@ public partial class MainWindow
         var token = pending.Token;
         try
         {
-            var reading = profile.Isolated ? await Task.Run(() => Usage.Read(profile, token), token) : null;
+            var reading = profile is { Provider: ProfileProvider.Claude, Isolated: true }
+                ? await Task.Run(() => Usage.Read(profile, token), token) : null;
             if (usageRead != pending || token.IsCancellationRequested || closed) return;
             snapshot = reading;
             usageFailed = false;
@@ -64,7 +65,7 @@ public partial class MainWindow
     }
     private void UpdateUsageDisplay()
     {
-        if (selected is not { } p || OverviewTab == null) return;
+        if (selected is not { Provider: ProfileProvider.Claude } p || OverviewTab == null) return;
         var now = DateTimeOffset.UtcNow;
         var stale = snapshot?.Observed is { } observed && (now - observed).TotalMinutes > 15;
         var capture = snapshot?.Capture == true;
@@ -128,9 +129,9 @@ public partial class MainWindow
                 var rows = batch.Select(p =>
                 {
                     bool open = integration.IsRunning(p);
-                    bool signed = integration.IsSignedIn(p);
+                    bool signed = p.Provider == ProfileProvider.Claude && integration.IsSignedIn(p);
                     (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Week) saved = default;
-                    try { saved = Usage.ReadLimits(p); }
+                    try { if (p.Provider == ProfileProvider.Claude) saved = Usage.ReadLimits(p); }
                     catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException) { }
                     return (p.CodeKey, open, signed, saved);
                 }).ToArray();
@@ -170,20 +171,20 @@ public partial class MainWindow
     {
         var open = status.TryGetValue(p.CodeKey, out var state) && state.Open;
         var mark = open ? "●" : "○";
-        if (p.Isolated && limits.TryGetValue(p.CodeKey, out var values))
+        if (p is { Provider: ProfileProvider.Claude, Isolated: true } && limits.TryGetValue(p.CodeKey, out var values))
         {
             var now = DateTimeOffset.UtcNow;
             var warning = new[] { (Key: "five_hour", Window: values.Five), (Key: "seven_day", Window: values.Week) }
                 .Where(x => x.Window is { Percent: > 80 } window && window.Resets > now)
                 .OrderByDescending(x => x.Window!.Percent).FirstOrDefault();
             if (warning.Window != null)
-                return (mark, warning.Window.Percent.ToString("0.##") + " % · " + T(warning.Key), Brushes.DarkOrange);
+                return (mark, p.Provider + " · " + warning.Window.Percent.ToString("0.##") + " % · " + T(warning.Key), Brushes.DarkOrange);
         }
-        return (mark, p.Shortcut.Length == 0 || bindings?.IsHotkeyRegistered(p.Id) == false ? DesktopStateText(p, open) : p.Shortcut,
+        return (mark, p.Shortcut.Length == 0 || bindings?.IsHotkeyRegistered(p.Id) == false ? DesktopStateText(p, open) : p.Provider + " · " + p.Shortcut,
             open ? Brushes.SeaGreen : (Brush)FindResource("Muted"));
     }
     private string DesktopStateText(Profile p, bool open) =>
-        !open && resourceReadings.ContainsKey(p.CodeKey) ? "Claude Desktop · " + T("fechado") : T(open ? "aberto" : "fechado");
+        (p.Provider == ProfileProvider.Codex ? "Codex" : "Claude Desktop") + " · " + T(open ? "aberto" : "fechado");
 
     private void UpdateRowIndicators()
     {
@@ -205,11 +206,12 @@ public partial class MainWindow
         SetResourceText(ProfileResources, p);
         bool known = status.TryGetValue(p.CodeKey, out var state);
         var waiting = loginProfile?.CodeKey == p.CodeKey;
-        DesktopStatus.Text = known ? DesktopStateText(p, state.Open) + " · " +
-            T(waiting ? "aguard" : state.Signed ? "conectado" : "desconectado") : "…";
+        bool claude = p.Provider == ProfileProvider.Claude;
+        DesktopStatus.Text = known ? DesktopStateText(p, state.Open) : p.Provider + " · …";
+        if (known && claude) DesktopStatus.Text += " · " + T(waiting ? "aguard" : state.Signed ? "conectado" : "desconectado");
         OpenProfile.Content = T(known && state.Open ? "switch" : "abrir");
-        SignIn.Visibility = ShowIf(!state.Signed && !waiting);
-        SignOut.Visibility = ShowIf(state.Signed);
+        SignIn.Visibility = ShowIf(claude && !state.Signed && !waiting);
+        SignOut.Visibility = ShowIf(claude && state.Signed);
         CloseDesktopButton.Visibility = ShowIf(state.Open);
     }
     private void SetResourceText(TextBlock label, Profile profile)
@@ -233,7 +235,7 @@ public partial class MainWindow
     private void RefreshClick(object sender, RoutedEventArgs e) => RequestUsage(true);
     private void ToggleCapture(object sender, RoutedEventArgs e) => Safe(() =>
     {
-        if (selected is not { Isolated: true } p || snapshot == null) return;
+        if (selected is not { Provider: ProfileProvider.Claude, Isolated: true } p || snapshot == null) return;
         if (!Usage.SetCapture(p, !snapshot.Capture)) MessageBox.Show(this, T("status_conflict"), T("quotas"));
         RequestUsage(true);
     });

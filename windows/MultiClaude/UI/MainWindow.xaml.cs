@@ -44,7 +44,6 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             Reload(catalog.Get("selected_code_key"));
-            CheckInstallation();
             pulse.Start();
             if (catalog.Get("idioma") is null)
                 Dispatcher.BeginInvoke(() => { if (!closed) Welcome(); }, DispatcherPriority.ApplicationIdle);
@@ -117,7 +116,9 @@ public partial class MainWindow : Window
         RenderPicker();
         EmptyState.Visibility = ShowIf(next == null);
         Workspace.Visibility = ShowIf(next != null);
+        DesktopInstallationNotice.Visibility = Visibility.Collapsed;
         if (next == null) return;
+        CheckInstallation(next.Provider);
         catalog.Set("selected_code_key", next.CodeKey);
         SelectedName.Text = next.Name;
         SelectedName.ToolTip = next.Name;
@@ -127,8 +128,13 @@ public partial class MainWindow : Window
         DataFolder.Text = next.DesktopPath;
         UpdateMetadata(next);
         DataSize.Text = T("folder_size") + "   —";
-        CodeMode.Text = T(next.Isolated ? "isolated" : "shared") + (next.Isolated && next.Sharing ? " · " + T("share_items") : "");
-        CodeLogin.Visibility = ShowIf(next.Isolated);
+        bool codex = next.Provider == ProfileProvider.Codex;
+        if (codex && (Tabs.SelectedItem == null || Tabs.SelectedItem == OverviewTab)) Tabs.SelectedItem = CodeTab;
+        OverviewTab.Visibility = CodeUsage.Visibility = ShowIf(!codex);
+        CodeTab.Header = codex ? "Codex CLI" : T("code_settings");
+        CodeMode.Text = codex ? T("codex_account") : T(next.Isolated ? "isolated" : "shared") +
+            (next.Isolated && next.Sharing ? " · " + T("share_items") : "");
+        CodeLogin.Visibility = ShowIf(codex || next.Isolated);
         MoveUp.IsEnabled = profiles.IndexOf(next) > 0;
         MoveDown.IsEnabled = profiles.IndexOf(next) < profiles.Count - 1;
         RenderStatus();
@@ -201,12 +207,14 @@ public partial class MainWindow : Window
         StartStatusRead();
     }
     private static void OpenInShell(string target) => Process.Start(new ProcessStartInfo(target) { UseShellExecute = true });
-    private async void CheckInstallation()
+    private async void CheckInstallation(ProfileProvider provider)
     {
         try
         {
-            bool available = await Task.Run(integration.DesktopAvailable);
-            if (!closed) DesktopInstallationNotice.Visibility = ShowIf(!available);
+            bool available = await Task.Run(() => integration.DesktopAvailable(provider));
+            if (closed || selected?.Provider != provider) return;
+            DesktopInstallationNotice.Text = T(provider == ProfileProvider.Codex ? "codex_missing_desktop" : "ausente");
+            DesktopInstallationNotice.Visibility = ShowIf(!available);
         }
         catch (Exception) { /* The launch action reports executable discovery errors when used. */ }
     }

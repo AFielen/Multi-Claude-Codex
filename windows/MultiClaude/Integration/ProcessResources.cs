@@ -142,7 +142,9 @@ internal sealed class ProcessResources
         do
         {
             tree[(int)entry.Pid] = new((int)entry.ParentPid,
-                string.Equals(entry.Executable, "claude.exe", StringComparison.OrdinalIgnoreCase));
+                string.Equals(entry.Executable, "claude.exe", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(entry.Executable, "ChatGPT.exe", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(entry.Executable, "Codex.exe", StringComparison.OrdinalIgnoreCase));
         } while (Process32NextW(snapshot, ref entry));
         int error = Marshal.GetLastWin32Error();
         if (error != 18) throw new Win32Exception(error); // ERROR_NO_MORE_FILES

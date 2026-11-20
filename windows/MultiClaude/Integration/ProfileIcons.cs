@@ -102,7 +102,7 @@ internal static class ProfileIcons
     private static Bitmap TaskbarFrame(string executable, Color dot, int size)
     {
         using var icon = Icon.ExtractIcon(executable, 0, size)
-            ?? throw new IOException("Das Programmsymbol von Claude Desktop konnte nicht geladen werden.");
+            ?? throw new IOException("Das Programmsymbol der Desktop-App konnte nicht geladen werden.");
         var bitmap = icon.ToBitmap();
         using var graphics = Graphics.FromImage(bitmap);
         graphics.SmoothingMode = SmoothingMode.AntiAlias;

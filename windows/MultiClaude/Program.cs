@@ -47,7 +47,7 @@ internal static class Program
             if (command.Key != "shared")
             {
                 selected = Catalog.FindInExisting(command.Home, command.Key!)
-                    ?? throw new ArgumentException("Claude Code profile is no longer registered.");
+                    ?? throw new ArgumentException("The terminal profile is no longer registered.");
                 if (!selected.Isolated) throw new ArgumentException("This profile now uses shared Claude Code settings.");
             }
             return new WindowsIntegration(command.Home).RunTerminal(selected, command.Login, command.ConsolePid);

@@ -42,7 +42,7 @@ internal sealed class TaskbarGroup
                 command = Command(shortManager, home);
                 if (command.Length > MaxPropertyText) command = Command(shortManager, ShortPath(home));
             }
-            string name = "Claude · " + profile.Name;
+            string name = profile.Provider + " · " + profile.Name;
             string icon = (iconFile.Length + 2 > MaxPropertyText ? ShortPath(iconFile) : iconFile) + ",0";
             bool changed = false;
             bool canRelaunch = command.Length <= MaxPropertyText && Set(store, state, RelaunchCommand, Value.String(command), ref changed)

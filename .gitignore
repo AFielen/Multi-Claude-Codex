@@ -7,6 +7,8 @@ log.txt
 log.txt.old
 dados/
 claude-code/
+codex-desktop/
+codex-home/
 profile_shortcuts/
 # The ten bundled pictures are tracked. Other gallery files belong to the user.
 profile_pictures/*

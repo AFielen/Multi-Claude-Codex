@@ -1,4 +1,5 @@
 """Windows profile-storage tests. All paths and profiles are temporary fixtures."""
+import contextlib
 import importlib.machinery
 import importlib.util
 import os
@@ -6,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import stat
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -51,6 +53,56 @@ class ProfileStorageTests(unittest.TestCase):
         erase.assert_not_called()
         self.close.assert_not_called()
         self.assertEqual(self.app.perfis(), [])
+
+    def test_mixed_catalog_stays_available_to_the_windows_edition(self):
+        claude = self.profile("portable/dados/claude")
+        foreign = self.profile("portable/foreign", name="Codex")
+        with self.mod.db() as con:
+            con.execute("ALTER TABLE profile_options ADD COLUMN provider TEXT DEFAULT 'claude'")
+            con.execute("UPDATE profile_options SET provider='codex' WHERE profile=?", (foreign[0],))
+            options = self.mod.prefs.all_settings(con)
+            claude_key, codex_key = options[claude[0]].key, options[foreign[0]].key
+            pinned = self.root / "original Claude home"
+            con.execute("INSERT INTO config VALUES (?,?)", ("wpf_code_home_" + claude_key, str(pinned)))
+        with self.assertRaisesRegex(OSError, "WPF"):
+            self.app.perfis()
+        self.mod.App.apagar_tudo(self.app)
+        self.restart.assert_not_called()
+        self.assertTrue(Path(claude[2], "Local State").is_file())
+        self.assertTrue(Path(foreign[2], "Local State").is_file())
+        self.assertEqual(self.mod.shortcut_target([claude_key, "--manager-home", str(self.base)]), claude_key)
+        with self.assertRaisesRegex(OSError, "WPF"):
+            self.mod.shortcut_target([codex_key, "--manager-home", str(self.base)])
+        with self.assertRaisesRegex(OSError, "WPF"):
+            self.mod.queue_shortcut(claude_key, time.time())
+        self.mod.queue_shortcut(claude_key, time.time(), already_running=True)
+        with self.assertRaisesRegex(OSError, "WPF"):
+            self.mod.queue_shortcut(codex_key, time.time(), already_running=True)
+        with self.assertRaisesRegex(OSError, "WPF"):
+            self.mod.profile_code.run_terminal_command(self.base, [codex_key])
+        with (patch.object(self.mod.profile_code, "_launch_spec", return_value=(["fixture"], {})) as select,
+              patch.object(self.mod.profile_code.subprocess, "run") as run):
+            run.return_value.returncode = 0
+            self.assertEqual(self.mod.profile_code.run_terminal_command(self.base, [claude_key]), 0)
+            select.assert_called_once_with(pinned, claude_key, False)
+        with contextlib.closing(sqlite3.connect(self.mod.DB)) as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM perfis").fetchone(), (2,))
+            self.assertEqual(con.execute("SELECT code_key FROM open_requests").fetchall(), [(claude_key,)])
+        original = self.mod.DB
+        self.app._inserir.side_effect = lambda *args: self.mod.App._inserir(self.app, *args)
+        self.app.nome_livre.side_effect = lambda *args: self.mod.App.nome_livre(self.app, *args)
+        with patch.object(self.mod, "DB", str(self.root / "destination.db")):
+            self.assertEqual(self.mod.importar_banco(self.app, original), 1)
+            self.assertEqual([p[2] for p in self.app.perfis()], [claude[2]])
+
+    def test_codex_folders_are_never_discovered_as_claude(self):
+        for name in (".codex", "roaming/Codex", "local/Packages/OpenAI.Codex_abc/LocalCache",
+                     "other/codex-desktop/" + "a" * 32, "other/codex-home/" + "b" * 32):
+            folder = self.root / name
+            folder.mkdir(parents=True)
+            for marker in ("config.json", "Local State"):
+                (folder / marker).write_text("{}")
+            self.assertFalse(self.mod.eh_perfil_claude(str(folder)), name)
 
     def test_shared_managed_directory_is_only_unlinked(self):
         profile = self.profile("portable/dados/shared")

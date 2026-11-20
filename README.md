@@ -4,7 +4,7 @@
 
 # Multi Claude Codex
 
-**Run several Claude Desktop accounts side by side — each one in its own window.**
+**Run Claude Desktop accounts side by side. The Windows WPF edition also supports multiple Codex accounts.**
 
 Based on Multi Claude, created by Richard KPL. Axel (AFielen) develops and maintains the Codex edition. [Original project](https://github.com/RichardKPL/multi-claude) · [Codex edition](https://github.com/AFielen/Multi-Claude-Codex)
 
@@ -27,7 +27,15 @@ Based on Multi Claude, created by Richard KPL. Axel (AFielen) develops and maint
 
 ## Windows WPF edition
 
-The native C#/.NET port of version 2.3.0 is in the Windows project. [Build, test and catalog compatibility](windows/README.md)
+The modified Windows WPF build supports Claude and Codex profiles in the same portable manager. The download badges above point to the original Claude release. Build the Windows project for Codex support. [Windows build and test instructions](windows/README.md)
+
+1. In **New profile**, choose **Codex** under **Application**, give the profile a name and save it. Existing profiles from a Claude catalog are recognized as Claude.
+2. Choose **Open** to launch the installed Codex desktop app and sign in. The **Codex CLI** tab also offers **Sign in** and **Open terminal**. Both use the same account for that profile.
+3. Create a second Codex profile for your other account. Use **Ctrl+K** to find either profile by name or application.
+
+Once a catalog contains Codex profiles, open it with the **Multi Claude Codex** Windows edition. Older managers assume every profile belongs to Claude.
+
+Each new Codex profile starts with a fresh native Windows `CODEX_HOME`. Beside the manager, `codex-desktop\<uuid>` holds desktop data and `codex-home\<uuid>` holds the account and CLI data. The manager does not copy your existing Codex sign-in or settings. Removing a profile preserves its code home. WSL and cloud sessions use their own storage. The manager’s token and plan-limit readings apply to Claude Code profiles.
 
 ## ✨ Features
 
@@ -53,7 +61,7 @@ The native C#/.NET port of version 2.3.0 is in the Windows project. [Build, test
 
 ## ⬇️ Download
 
-1. For the modified edition, use **Run and build from source** below. The original author's published build is available from the [upstream releases page](https://github.com/RichardKPL/multi-claude/releases/latest).
+1. For the modified edition, follow the [Windows WPF instructions](windows/README.md) or the Python build instructions below. The original author's published build is available from the [upstream releases page](https://github.com/RichardKPL/multi-claude/releases/latest).
 2. Put it in a folder of its own (e.g. `Documents\Multi Claude`) — that's where your data will be stored.
 3. Run it. On first launch it asks for your language and offers to import any profiles it finds.
 

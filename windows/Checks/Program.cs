@@ -21,6 +21,9 @@ internal static class CheckRunner
             Console.WriteLine("PASS SQLite import, identities, path and deletion rules");
             IntegrationChecks.Run(Path.Combine(temp.FullName, "integration"));
             Console.WriteLine("PASS Windows integration, isolated launch settings, shortcuts, sharing");
+            CodexLauncherChecks.Run(Path.Combine(temp.FullName, "codex package"));
+            CodexProfileChecks.Run(Path.Combine(temp.FullName, "codex"));
+            Console.WriteLine("PASS simultaneous Codex desktops and profile-specific terminals");
             TaskbarOverlayChecks.Run(temp.FullName);
             Console.WriteLine("PASS profile colors on Claude taskbar icons");
             CodeProcessRegistryChecks.Run(temp.FullName);

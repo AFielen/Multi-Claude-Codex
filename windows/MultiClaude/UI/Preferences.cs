@@ -125,7 +125,10 @@ public partial class MainWindow
     {
         var dialog = new Form(this, T("apagar_tudo"), 415, 320);
         Note(dialog.Fields, T("apagar_tudo_sub"), true);
-        Note(dialog.Fields, T("pastas_preservadas") + "\n" + T("hold_code"));
+        var notices = new List<string> { T("pastas_preservadas") };
+        if (profiles.Any(p => p.Provider == ProfileProvider.Claude)) notices.Add(T("hold_code"));
+        if (profiles.Any(p => p.Provider == ProfileProvider.Codex)) notices.Add(T("hold_codex"));
+        Note(dialog.Fields, string.Join("\n", notices));
         string word = T("palavra");
         Note(dialog.Fields, Format("apagar_confirma", "p", word));
         var field = new TextBox();

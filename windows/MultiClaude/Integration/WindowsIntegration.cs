@@ -10,38 +10,60 @@ public sealed class WindowsIntegration : IDisposable
 {
     private readonly string home;
     private readonly Dictionary<string, long> pending = new(StringComparer.OrdinalIgnoreCase);
-    private readonly DesktopWindows windows = new();
+    private readonly DesktopWindows claudeWindows = new();
+    private readonly DesktopWindows codexWindows = new(ProfileProvider.Codex);
+    private readonly Func<ProfileProvider, string> desktopProgram;
+    private readonly Func<ProfileProvider, string> terminalProgram;
     private readonly ProcessResources resources = new();
     private (string Key, string Folder, long Expires)? login;
     private readonly HashSet<int> colored = [];
     private Dictionary<string, Profile>? currentProfiles;
     private bool disposed;
 
-    public WindowsIntegration(string home)
+    public WindowsIntegration(string home) : this(home,
+        provider => provider == ProfileProvider.Codex ? CodexLauncher.FindDesktop() : CodeLauncher.FindDesktop(),
+        provider => provider == ProfileProvider.Codex ? CodexLauncher.FindCode() : CodeLauncher.FindCode()) { }
+
+    internal WindowsIntegration(string home, Func<ProfileProvider, string> desktopProgram, Func<ProfileProvider, string> terminalProgram)
     {
         StoragePaths.RequireOrdinary(home);
         this.home = Path.GetFullPath(home);
+        this.desktopProgram = desktopProgram;
+        this.terminalProgram = terminalProgram;
     }
+
+    private DesktopWindows Windows(ProfileProvider provider) => provider == ProfileProvider.Codex ? codexWindows : claudeWindows;
 
     public void OpenDesktop(Profile p)
     {
-        var pids = windows.Matching(p.DesktopPath, fresh: true);
+        p = CurrentProfile(p);
+        var pids = Windows(p.Provider).Matching(p.DesktopPath, fresh: true);
         if (DesktopWindows.Focus(pids)) return;
         if (pending.TryGetValue(p.DesktopPath, out var expires) && Environment.TickCount64 < expires) return;
         LaunchDesktop(p, null);
         pending[p.DesktopPath] = Environment.TickCount64 + 4000;
     }
 
-    private void LaunchDesktop(Profile p, string? link)
+    private Profile CurrentProfile(Profile p)
     {
         var current = Catalog.FindInExisting(home, p.CodeKey);
-        if (current is null || current.Id != p.Id || !DesktopWindows.SamePath(current.DesktopPath, p.DesktopPath))
+        if (current is null || current.Id != p.Id || current.Provider != p.Provider ||
+            !DesktopWindows.SamePath(current.DesktopPath, p.DesktopPath) || !DesktopWindows.SamePath(current.CodeHome, p.CodeHome))
             throw new InvalidOperationException("Dieses Profil ist nicht mehr im Katalog verfügbar.");
         new Catalog(home).ValidateDesktop(current);
-        var program = CodeLauncher.FindDesktop();
+        return current;
+    }
+
+    private void LaunchDesktop(Profile current, string? link)
+    {
+        var program = desktopProgram(current.Provider);
         var start = CodeLauncher.StartInfo(program);
         start.ArgumentList.Add("--user-data-dir=" + current.DesktopPath);
-        if (link != null) start.ArgumentList.Add(link);
+        if (link != null)
+        {
+            if (current.Provider != ProfileProvider.Claude) throw new ArgumentException("Anmeldelinks gehören zu Claude Desktop.");
+            start.ArgumentList.Add(link);
+        }
         PrepareEnvironment(start, current);
         Directory.CreateDirectory(current.DesktopPath);
         using var launched = Process.Start(start);
@@ -50,30 +72,34 @@ public sealed class WindowsIntegration : IDisposable
     public void BeginLogin(Profile p)
     {
         login = null;
-        LaunchDesktop(p, null);
+        if (p.Provider == ProfileProvider.Codex) { OpenDesktop(p); return; }
+        LaunchDesktop(CurrentProfile(p), null);
         login = (p.CodeKey, p.DesktopPath, Environment.TickCount64 + 300_000);
     }
 
     public void CancelLogin() => login = null;
 
-    public IReadOnlySet<string> RunningFolders() => windows.Folders();
+    public IReadOnlySet<string> RunningFolders() => claudeWindows.Folders();
 
     internal Dictionary<string, ResourceReading> ReadProcessResources(IReadOnlyList<Profile> profiles)
     {
         var roots = CodeProcessRegistry.Active(home, profiles);
-        var (desktops, observedBy) = windows.Roots();
-        foreach (var p in profiles)
+        foreach (var group in profiles.GroupBy(p => p.Provider))
         {
-            if (!desktops.TryGetValue(p.DesktopPath, out var pids)) continue;
-            if (!roots.TryGetValue(p.CodeKey, out var list)) roots[p.CodeKey] = list = [];
-            foreach (int pid in pids) list.Add(new ProcessRoot(pid, 0, observedBy));
+            var (desktops, observedBy) = Windows(group.Key).Roots();
+            foreach (var p in group)
+            {
+                if (!desktops.TryGetValue(p.DesktopPath, out var pids)) continue;
+                if (!roots.TryGetValue(p.CodeKey, out var list)) roots[p.CodeKey] = list = [];
+                foreach (int pid in pids) list.Add(new ProcessRoot(pid, 0, observedBy));
+            }
         }
         return resources.Sample(roots);
     }
 
-    public bool DesktopAvailable()
+    public bool DesktopAvailable(ProfileProvider provider = ProfileProvider.Claude)
     {
-        try { _ = CodeLauncher.FindDesktop(); return true; }
+        try { _ = desktopProgram(provider); return true; }
         catch (FileNotFoundException) { return false; }
     }
 
@@ -90,12 +116,13 @@ public sealed class WindowsIntegration : IDisposable
             || Environment.TickCount64 >= attempt.Expires)
             throw new InvalidOperationException("Bitte die Anmeldung für dieses Profil erneut starten.");
         if (!ValidLink(link)) throw new ArgumentException("Ungültiger Claude-Anmeldelink.");
-        LaunchDesktop(p, link);
+        LaunchDesktop(CurrentProfile(p), link);
         login = null;
     }
 
     public bool IsRunning(Profile p)
     {
+        var windows = Windows(p.Provider);
         var (roots, observedByUtcTicks) = windows.Roots();
         lock (colored)
         {
@@ -103,7 +130,8 @@ public sealed class WindowsIntegration : IDisposable
             if (disposed) return true;
             if (currentProfiles != null)
             {
-                if (!currentProfiles.TryGetValue(p.CodeKey, out var current) || !DesktopWindows.SamePath(current.DesktopPath, p.DesktopPath))
+                if (!currentProfiles.TryGetValue(p.CodeKey, out var current) || current.Provider != p.Provider ||
+                    !DesktopWindows.SamePath(current.DesktopPath, p.DesktopPath))
                     return true;
                 p = current;
             }
@@ -117,7 +145,7 @@ public sealed class WindowsIntegration : IDisposable
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException
                     or InvalidOperationException or System.Runtime.InteropServices.ExternalException)
-                { /* Keep reporting status if Claude exits or Windows declines the decoration. */ }
+                { /* Keep reporting status if the app exits or Windows declines the decoration. */ }
             }
         }
         return true;
@@ -125,7 +153,11 @@ public sealed class WindowsIntegration : IDisposable
 
     internal void PruneWindowIcons()
     {
-        lock (colored) windows.PruneIcons();
+        lock (colored)
+        {
+            claudeWindows.PruneIcons();
+            codexWindows.PruneIcons();
+        }
     }
 
     internal void SyncProfiles(IReadOnlyList<Profile> profiles)
@@ -135,8 +167,9 @@ public sealed class WindowsIntegration : IDisposable
         {
             if (currentProfiles != null)
                 foreach (var old in currentProfiles.Values)
-                    if (!next.TryGetValue(old.CodeKey, out var profile) || !DesktopWindows.SamePath(old.DesktopPath, profile.DesktopPath))
-                        windows.RestoreProfile(old);
+                    if (!next.TryGetValue(old.CodeKey, out var profile) || profile.Provider != old.Provider ||
+                        !DesktopWindows.SamePath(old.DesktopPath, profile.DesktopPath))
+                        Windows(old.Provider).RestoreProfile(old);
             currentProfiles = next;
         }
     }
@@ -146,12 +179,14 @@ public sealed class WindowsIntegration : IDisposable
         lock (colored)
         {
             disposed = true;
-            windows.Dispose();
+            claudeWindows.Dispose();
+            codexWindows.Dispose();
         }
     }
 
     public bool IsSignedIn(Profile p)
     {
+        if (p.Provider != ProfileProvider.Claude) return false;
         try
         {
             if (string.IsNullOrWhiteSpace(p.DesktopPath)) return false;
@@ -180,6 +215,7 @@ public sealed class WindowsIntegration : IDisposable
     public void CloseDesktop(Profile p)
     {
         if (login?.Key == p.CodeKey) login = null;
+        var windows = Windows(p.Provider);
         var pids = windows.Matching(p.DesktopPath, fresh: true, strict: true);
         if (pids.Count == 0) return;
         DesktopWindows.Close(pids);
@@ -189,11 +225,12 @@ public sealed class WindowsIntegration : IDisposable
             Thread.Sleep(150);
             if (windows.Matching(p.DesktopPath, fresh: true, strict: true).Count == 0) return;
         }
-        throw new IOException("Claude Desktop für dieses Profil bitte schließen und den Vorgang erneut starten.");
+        throw new IOException($"Bitte {p.Provider} für dieses Profil beenden und den Vorgang erneut starten.");
     }
 
     public void SignOut(Profile p)
     {
+        if (p.Provider != ProfileProvider.Claude) throw new InvalidOperationException("Bitte in Codex abmelden.");
         new Catalog(home).ValidateDesktop(p);
         if (!StoragePaths.RequireUnsharedFile(Path.Combine(p.DesktopPath, "Local State"))
             || !StoragePaths.RequireUnsharedFile(Path.Combine(p.DesktopPath, "config.json")))
@@ -223,13 +260,19 @@ public sealed class WindowsIntegration : IDisposable
     public string CodeDirectory(Profile p)
     {
         if (!Regex.IsMatch(p.CodeKey, @"\A[0-9a-f]{32}\z")) throw new ArgumentException("Ungültige Profilkennung.");
-        var path = Path.Combine(p.CodeHome, "claude-code", p.CodeKey);
+        var path = Path.Combine(p.CodeHome, p.Provider == ProfileProvider.Codex ? "codex-home" : "claude-code", p.CodeKey);
         StoragePaths.RequireOrdinary(path);
         return path;
     }
 
     private void PrepareEnvironment(ProcessStartInfo start, Profile? p)
     {
+        if (p?.Provider == ProfileProvider.Codex)
+        {
+            if (!p.Isolated || p.Sharing) throw new InvalidDataException("Codex benötigt eine eigene Profilkonfiguration.");
+            CodexLauncher.Prepare(start, CodeDirectory(p), p.DesktopPath);
+            return;
+        }
         if (p is not { Isolated: true }) return;
         var config = CodeDirectory(p);
         CodeLauncher.Isolate(start, config);
@@ -238,6 +281,7 @@ public sealed class WindowsIntegration : IDisposable
 
     public void SetSharing(Profile p, bool enabled)
     {
+        if (p.Provider != ProfileProvider.Claude) throw new InvalidOperationException("Diese Freigabe ist nur für Claude Code verfügbar.");
         string dir = CodeDirectory(p);
         CodeLauncher.Prepare(dir);
         CodeSharing.Sync(dir, DefaultShared(), enabled, false);
@@ -248,8 +292,14 @@ public sealed class WindowsIntegration : IDisposable
     private ProcessStartInfo CodeStart(Profile? p, bool login)
     {
         if (login && p is not { Isolated: true }) throw new ArgumentException("Für die Anmeldung ein isoliertes Claude-Code-Profil wählen.");
-        var start = CodeLauncher.StartInfo(CodeLauncher.FindCode());
-        if (login) { start.ArgumentList.Add("auth"); start.ArgumentList.Add("login"); }
+        if (p?.Provider == ProfileProvider.Codex) p = CurrentProfile(p);
+        var provider = p?.Provider ?? ProfileProvider.Claude;
+        var start = CodeLauncher.StartInfo(terminalProgram(provider));
+        if (login)
+        {
+            if (provider == ProfileProvider.Claude) start.ArgumentList.Add("auth");
+            start.ArgumentList.Add("login");
+        }
         PrepareEnvironment(start, p);
         return start;
     }
@@ -271,7 +321,7 @@ public sealed class WindowsIntegration : IDisposable
 
     internal int RunTerminal(Profile? p, ProcessStartInfo start)
     {
-        using var cli = Process.Start(start) ?? throw new IOException("Claude Code konnte nicht gestartet werden.");
+        using var cli = Process.Start(start) ?? throw new IOException("Das Profil-Terminal konnte nicht gestartet werden.");
         CodeProcessRegistry.Record(home, p, CodeProcessRegistry.Identity(cli.Id, cli.SafeHandle));
         cli.WaitForExit();
         return cli.ExitCode;
