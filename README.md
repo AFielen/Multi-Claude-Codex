@@ -1,147 +1,47 @@
-<div align="center">
+> Based on Multi Claude, created by Richard KPL ([author](https://github.com/RichardKPL)). [Original Multi Claude repository](https://github.com/RichardKPL/multi-claude)
 
-<img src="recursos/icone.png" width="112" alt="Multi Claude">
+# MultiCloud Codex
 
-# Multi Claude Codex
+<img src="recursos/icone.png" width="96" align="right" alt="MultiCloud Codex">
 
-**Run Claude Desktop accounts side by side. The Windows WPF edition also supports multiple Codex accounts.**
+Run work and personal accounts side by side on Windows. MultiCloud Codex gives each Codex or Claude Desktop profile its own sign-in and window. For a Codex profile, the desktop app and the native Windows CLI share the same account.
 
-Based on Multi Claude, created by Richard KPL. Axel (AFielen) develops and maintains the Codex edition. [Original project](https://github.com/RichardKPL/multi-claude) · [Codex edition](https://github.com/AFielen/Multi-Claude-Codex)
+Axel (AFielen) maintains this edition. [GitHub repository](https://github.com/AFielen/Multi-Claude-Codex) · [Windows guide (Deutsch)](windows/README.md)
 
-[![Original release](https://img.shields.io/github/v/release/RichardKPL/multi-claude?label=original%20release&color=d97757&style=for-the-badge)](https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe)
-[![License GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-1f1e1d?style=for-the-badge)](LICENSE)
-[![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=for-the-badge&logo=windows)](#requirements)
-[![Portable](https://img.shields.io/badge/portable-no%20install-5fa85e?style=for-the-badge)](#download)
+## Build and start on Windows
 
-[**Original website**](https://richardkpl.github.io/multi-claude/) ·
-[**Original changelog**](https://richardkpl.github.io/multi-claude/changelog.html) ·
-[**Build the Codex edition**](#windows-wpf-edition) ·
-[**How it works**](#how-it-works) ·
-[**License**](#license--credits)
+You need 64-bit Windows 10 or 11 and the .NET 10 SDK to build the manager. Install the desktop app you want to launch. For a profile terminal, its Windows CLI must also be available.
 
-<img src="docs/img/en/principal-claro.png" alt="Multi Claude 2.1 main window" width="860">
-
-</div>
-
----
-
-## Windows WPF edition
-
-The modified Windows WPF build supports Claude and Codex profiles in the same portable manager. The download badges above point to the original Claude release. Build the Windows project for Codex support. [Windows build and test instructions](windows/README.md)
-
-1. In **New profile**, choose **Codex** under **Application**, give the profile a name and save it. Existing profiles from a Claude catalog are recognized as Claude.
-2. Choose **Open** to launch the installed Codex desktop app and sign in. The **Codex CLI** tab also offers **Sign in** and **Open terminal**. Both use the same account for that profile.
-3. Create a second Codex profile for your other account. Use **Ctrl+K** to find either profile by name or application.
-
-Once a catalog contains Codex profiles, open it with the **Multi Claude Codex** Windows edition. Older managers assume every profile belongs to Claude.
-
-Each new Codex profile starts with a fresh native Windows `CODEX_HOME`. Beside the manager, `codex-desktop\<uuid>` holds desktop data and `codex-home\<uuid>` holds the account and CLI data. The manager does not copy your existing Codex sign-in or settings. Removing a profile preserves its code home. WSL and cloud sessions use their own storage. The manager’s token and plan-limit readings apply to Claude Code profiles.
-
-## ✨ Features
-
-| | |
-|---|---|
-| 👥 **Unlimited profiles** | Every profile is a separate Claude Desktop with its own sign-in, sessions and settings. |
-| 🔐 **Profile sign-in** | Select a profile and explicitly paste its browser return link in the profile's sign-in dialog. |
-| 🟢 **Profile switching** | Select a profile in the sidebar, drag to reorder and open or focus its window. Profiles can have a global shortcut, a notification-area initial and a saved Windows shortcut. |
-| **Claude Code** | New profiles have their own Code configuration and terminal command. Existing profiles keep their previous shared configuration until you enable isolation in the editor. |
-| **Usage** | View recorded input, output and cache tokens. The optional Claude Code status line supplies five-hour and weekly plan readings, reset times and a warning above 80%. |
-| 🖼️ **Profile pictures** | Built-in gallery plus your own images. Any image dropped into `profile_pictures` becomes an option. |
-| 🎨 **Light, Dark or System** | Follows the Windows theme live — title bar included. |
-| 🌍 **10 languages** | Português, English, Español, Français, Deutsch, Italiano, Русский, 日本語, 中文, 한국어. |
-| 📦 **Portable** | Newly created profiles live next to the executable. Imported profiles keep using their original directories. |
-| ⇩ **Profile import** | Finds Claude profiles that already exist on the machine (or another `perfis.db`) and imports them. |
-| 🧨 **Danger zone** | Remove manager settings and eligible Desktop data with typed confirmation. Separate Claude Code directories are retained. |
-| 📐 **Responsive layout** | The manager opens at 480 × 360 logical pixels. Pick a profile directly or search by name with Ctrl+K. Widen the window for a sidebar. The manager remembers your window size, selection and profile order. |
-
-<div align="center">
-<img src="docs/img/en/principal-escuro.png" width="420" alt="Multi Claude 2.1 dark theme">
-<img src="docs/img/en/fotos.png" width="380" alt="Profile pictures">
-</div>
-
-## ⬇️ Download
-
-1. For the modified edition, follow the [Windows WPF instructions](windows/README.md) or the Python build instructions below. The original author's published build is available from the [upstream releases page](https://github.com/RichardKPL/multi-claude/releases/latest).
-2. Put it in a folder of its own (e.g. `Documents\Multi Claude`) — that's where your data will be stored.
-3. Run it. On first launch it asks for your language and offers to import any profiles it finds.
-
-> The local build produces an unsigned Windows executable.
-
-### Requirements
-
-- Windows 10 or 11
-- [Claude Desktop](https://claude.ai/download) installed
-- A writable local folder for the portable app and its profiles (a local USB drive also works).
-
-## 🚀 Usage
-
-1. Choose **New profile** and set its name, picture, color and optional shortcut. **Edit profile** opens the same settings later. Windows 11 supports a profile-colored native window border.
-2. Select **Sign in** on the profile you want and complete sign-in in Claude. If the browser shows a return link for Claude Desktop, copy it, choose **Paste link** in Multi Claude, check the profile name in the dialog, paste and confirm. The manual flow requires a browser that exposes the return link.
-3. Pick a profile and use **Open** or **Switch to window**. Ctrl+K opens profile search. Use the arrow keys and Enter to select a match. A global shortcut or notification-area letter works while the manager is running. **Edit profile** is below the profile name. In **Profile details** you can reorder the profile and save a Windows shortcut that also opens it when the manager is closed.
-4. In **Claude Code**, choose **Open terminal**, **Sign in** or **Copy command**. The terminal requires the official Windows CLI. Switching Code configuration takes effect on a fresh launch. Optional sharing connects existing skills, agents, commands and user instructions with the standard setup. Personal files already present in the isolated configuration take precedence. [Claude Code setup](https://code.claude.com/docs/en/setup)
-5. **Overview** shows the five-hour and weekly plan readings with their reset times. **Claude Code** shows token totals for the selected isolated profile’s retained local history. Refresh keeps your tab, position and previous readings visible while the new data loads. **Enable limit readings** installs a status line in that profile. A supported account receives readings after an API response. Existing custom status lines are preserved. [Claude Code status line](https://code.claude.com/docs/en/statusline#available-data)
-
-<div align="center">
-<img src="docs/img/en/boas-vindas.png" width="300" alt="Welcome screen">
-<img src="docs/img/en/configuracoes.png" width="260" alt="Settings">
-</div>
-
-## ⚙️ How it works
-
-- Each profile runs Claude Desktop with `--user-data-dir=<profile folder>`, so sign-ins and sessions stay isolated.
-- **Sign-in** passes the link you explicitly confirm to the selected Claude Desktop instance. Canceling or timing out discards the pending action. If an older Multi Claude installation registered itself as a browser or protocol handler, open Windows Settings → Apps → Default apps and choose your browser for web links and Claude Desktop for `claude://`.
-- **Status** uses each profile's Claude log and configuration for sign-in status, and the running Claude processes for open status.
-- **Sign out** requests a normal shutdown of the profile's Claude instance, then clears its local cookies and account information. A cleanup error is shown in the app.
-- **Delete and reset** preserve external profile folders. Erasing a registered profile's data requires an exclusively used profile directory directly inside `dados`. Unregistered directories are also preserved.
-
-### Where data lives (portable mode)
-
-```
-Multi Claude.exe
-perfis.db            ← profiles, language, theme (SQLite)
-log.txt              ← diagnostic log
-dados\<profile>\     ← each profile's Claude data
-claude-code\<uuid>\  ← isolated local Claude Code data
-profile_shortcuts\  ← profile icons for saved Windows launchers
-profile_pictures\    ← default pictures + the ones you add (usuario_*)
-```
-
-After moving the executable or the profile folder, recreate exported Windows shortcuts and copy fresh terminal commands. Both contain absolute paths. Local Code settings use `CLAUDE_CONFIG_DIR` when starting the Windows CLI and Claude Desktop. Desktop authentication is separate, and remote, cloud and WSL environments have their own storage. [Desktop environment configuration](https://code.claude.com/docs/en/desktop#environment-variables-in-local-sessions)
-
-## 🛠️ Run and build from source
+Clone this repository and build the portable Windows edition in PowerShell.
 
 ```powershell
-py -3.14 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
-.\.venv\Scripts\python.exe -m unittest discover -s recursos -p "test_*.py"
-.\.venv\Scripts\python.exe recursos/build_exe.py
-.\.venv\Scripts\python.exe recursos/smoke_exe.py
+git clone https://github.com/AFielen/Multi-Claude-Codex.git
+cd Multi-Claude-Codex
+dotnet publish windows/MultiClaude/MultiClaude.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o dist/wpf-win-x64
 ```
 
-On Windows, the build creates `dist/Multi Claude.exe`. Distribute it together with `LICENSE`, `NOTICE`, `AUTHORS` and `THIRD-PARTY-NOTICES.txt` from the same directory. The build verifies both icons, ten default pictures, the license and the attribution files against their recorded SHA-256 hashes. To run the source directly, use `.\.venv\Scripts\pythonw.exe "Multi Claude.pyw"`.
+Copy the **contents of `dist\wpf-win-x64`** together to a writable folder such as `Documents\MultiCloud Codex`, outside your Codex data folders. Run **`Multi Claude.exe`** from there. The package includes the .NET runtime, the picture gallery and the license files.
 
-```
-Multi Claude.pyw        application source
-recursos/               icon and build script
-profile_pictures/       default profile pictures
-docs/                   website (GitHub Pages)
-LICENSE · NOTICE        GPL-3.0 license + attribution terms
-AUTHORS                 original project and Codex edition credits
-```
+## Open two Codex accounts
 
-## 🌐 Website
+1. Choose **New profile**, select **Codex** under **Application**, name the profile (for example, `Work`) and choose **Save**.
+2. Select **Open** and sign in to the desktop app with your work account. To use that account in a terminal, select **Codex CLI → Open terminal**. You can also sign in from the **Codex CLI** tab.
+3. Create a second Codex profile named `Personal`. Open it and sign in with your other account. Press **Ctrl+K** to find either profile by name.
 
-The `docs/` folder contains the source for the original Multi Claude website. The site detects the visitor's browser language on first visit, falls back to English when it is not supported, and also provides a manual language selector. [Richard KPL’s project website](https://richardkpl.github.io/multi-claude/)
+Each new Codex profile starts with fresh settings. Its desktop data lives in `codex-desktop\<uuid>` and its native Windows `CODEX_HOME` lives in `codex-home\<uuid>`, beside the manager. Removing the profile retains its `codex-home` folder. WSL and cloud sessions use their own storage.
 
-Screenshots in `docs/img/<language>/` show fictional profiles. They follow the selected website language and fall back to English if an image is unavailable. To regenerate them on Windows with Pillow installed, run `python recursos/capture_screenshots.py` (or append language codes). The capture tool uses a temporary database and disables Claude discovery and status polling.
+## Use a Claude account
 
-## 📄 License & credits
+Choose **Claude** under **Application** when creating the profile. Select **Sign in**. If the browser offers a return link, copy it, choose **Paste link** in the manager and confirm the profile name.
 
-Multi Claude Codex uses the original GNU General Public License, version 3, with the additional attribution terms from Multi Claude. [License](LICENSE) · [Original notice](NOTICE)
+The **Claude Code** tab opens a terminal for the selected profile. For profiles with a separate Claude Code configuration, it also shows token totals from local history. **Enable limit readings** adds the five-hour and weekly readings to **Overview** once Claude Code reports them.
 
-- **Original project.** Based on Multi Claude, created by Richard KPL. © 2026 Richard KPL. [Author](https://github.com/RichardKPL) · [Multi Claude](https://github.com/RichardKPL/multi-claude)
-- **Codex edition.** © 2026 Axel (AFielen) for changes in this edition. [Maintainer](https://github.com/AFielen) · [Multi Claude Codex](https://github.com/AFielen/Multi-Claude-Codex)
+## Switch profiles and move your setup
 
-If you distribute a modified version, include the original `LICENSE` and `NOTICE` and keep Richard's credit visible in the About section, footer and README as described in `NOTICE`. For a version based on Multi Claude Codex, please carry both credits and project links forward and identify your own changes. [Credits to include](AUTHORS)
+- Use **Ctrl+K**, a global shortcut or the manager’s notification-area menu to open a profile or bring its window forward. Closing the manager window leaves it in the notification area. Choose **Exit manager** there to quit.
+- To move your setup, copy the whole manager folder, including the `perfis.db` catalog and the profile directories. Imported profiles keep their original data paths. Recreate saved Windows shortcuts and copy fresh terminal commands after the move.
+- When opening an existing Claude catalog, the manager recognizes its profiles as Claude. Once you add a Codex profile, use MultiCloud Codex to open that catalog. [Windows catalog and migration details](windows/README.md#daten-bei-einem-späteren-wechsel)
 
-> **Disclaimer:** "Claude" and "Claude Desktop" are trademarks of Anthropic, PBC. Multi Claude is an independent project and is **not affiliated with, endorsed by or sponsored by Anthropic**. Please use it in accordance with [Claude's terms of service](https://www.anthropic.com/legal/consumer-terms).
+## License and credits
+
+MultiCloud Codex is distributed under GPL-3.0 with the attribution terms in `NOTICE`. Include the license and attribution files when redistributing the portable package. [License](LICENSE) · [Notice](NOTICE) · [Authors and project credits](AUTHORS)
