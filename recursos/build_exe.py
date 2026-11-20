@@ -37,6 +37,7 @@ RECURSOS_PADRAO = {
     "profile_pictures/robot.png": "c895f325f5615d4d4cbd0da63ebe4caebb755227f0887e91b7fdd70735d03f7e",
     "LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
     "NOTICE": "d70b0367cf36a59e9495d4b2fb90f76cb937a07ac01754d3ef683c5211fb1529",
+    "AUTHORS": "e82a4b7df421ae2aefbd9837157a98a83c1d161f8c92cc3c228a5b7a85945aba",
 }
 
 
@@ -46,8 +47,8 @@ def preparar_recursos(pasta):
         if origem.resolve(strict=True) != origem or not origem.is_file():
             raise ValueError(f"Recurso inválido: {nome}")
         dados = origem.read_bytes()
-        # Git pode converter finais de linha dos dois documentos no Windows.
-        canonico = dados.replace(b"\r\n", b"\n") if nome in ("LICENSE", "NOTICE") else dados
+        # Git pode converter finais de linha dos documentos no Windows.
+        canonico = dados.replace(b"\r\n", b"\n") if nome in ("LICENSE", "NOTICE", "AUTHORS") else dados
         if hashlib.sha256(canonico).hexdigest() != digest:
             raise ValueError(f"Recurso diferente da versão revisada: {nome}")
         destino = pasta / nome
@@ -82,12 +83,12 @@ def arquivo_versao(pasta, v):
                     fileType=0x1, subtype=0x0, date=(0, 0)),
   kids=[
     StringFileInfo([StringTable('041604B0', [
-      StringStruct('FileDescription', 'Multi Claude (modified edition)'),
+      StringStruct('FileDescription', 'Multi Claude Codex — modified edition by Axel (AFielen)'),
       StringStruct('FileVersion', '{v}'),
       StringStruct('InternalName', 'Multi Claude'),
       StringStruct('LegalCopyright', 'Based on Multi Claude, created by Richard KPL (https://github.com/RichardKPL) — GPL-3.0'),
       StringStruct('OriginalFilename', 'Multi Claude.exe'),
-      StringStruct('ProductName', 'Multi Claude (modified edition)'),
+      StringStruct('ProductName', 'Multi Claude Codex'),
       StringStruct('ProductVersion', '{v}')])]),
     VarFileInfo([VarStruct('Translation', [0x0416, 1200])])
   ]
@@ -125,7 +126,7 @@ def main():
             args.extend(["--add-data", f"{pasta / nome}:{Path(nome).parent}"])
         env = {**os.environ, "PYINSTALLER_CONFIG_DIR": str(pasta / "cache")}
         subprocess.run(args, cwd=pasta, env=env, check=True)
-        for nome in ("LICENSE", "NOTICE", AVISOS_TERCEIROS):
+        for nome in ("LICENSE", "NOTICE", "AUTHORS", AVISOS_TERCEIROS):
             (pasta / nome).replace(dist / nome)
         (pasta / "out" / EXE).replace(dist / EXE)
     print(f"Pronto: {dist / EXE} (v{v})")

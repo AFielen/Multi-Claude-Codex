@@ -55,11 +55,13 @@ class UpdateTests(unittest.TestCase):
         (self.source / "dados" / "demo").mkdir(parents=True)
 
     def test_stages_only_release_files_and_keeps_original_basis(self):
+        (self.release / "AUTHORS").write_bytes(b"Edition contributor credits")
         (self.release / "perfis.db").write_bytes(b"unrelated fixture")
         original = (self.source / "perfis.db").read_bytes()
         exe_hash = hashlib.sha256((self.release / "Multi Claude.exe").read_bytes()).hexdigest()
         update.stage(self.release, self.target, exe_hash)
-        self.assertEqual(set(p.name for p in (self.target / "App").iterdir()), set(update.PACKAGE))
+        self.assertEqual(set(p.name for p in (self.target / "App").iterdir()), {*update.PACKAGE, "AUTHORS"})
+        self.assertEqual((self.target / "App" / "AUTHORS").read_bytes(), b"Edition contributor credits")
         self.assertFalse((self.target / "Profiles").exists())
         launcher = (self.target / update.LAUNCHER).read_text(encoding="ascii")
         self.assertIn("MULTI_CLAUDE_HOME=%~dp0Profiles", launcher)

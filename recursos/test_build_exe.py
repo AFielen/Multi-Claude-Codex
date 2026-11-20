@@ -36,7 +36,7 @@ class BuildTests(unittest.TestCase):
             (metadata / "RECORD").write_text(f"{metadata.name}/licenses/{license_file},,\n", encoding="utf8")
             (licenses / license_file).write_bytes(f"Fixture {name} ©\r\nSecond line".encode())
         self.assets = [Path("recursos/icone.ico"), Path("recursos/icone.png"),
-                       Path("LICENSE"), Path("NOTICE")]
+                       Path("LICENSE"), Path("NOTICE"), Path("AUTHORS")]
         self.assets.extend(Path("profile_pictures", name) for name in PORTRAITS)
         script = Path("recursos/build_exe.py")
         self.modules = [Path(name + ".py") for name in ("profile_code", "profile_settings", "profile_shortcut",
@@ -89,7 +89,7 @@ class BuildTests(unittest.TestCase):
         for path in self.assets:
             self.assertEqual(bundled[path], (ROOT / path).read_bytes(), path)
         self.assertEqual((self.root / "dist" / EXE).read_bytes(), b"synthetic packaged output")
-        for name in ("NOTICE", "LICENSE"):
+        for name in ("NOTICE", "LICENSE", "AUTHORS"):
             self.assertEqual((self.root / "dist" / name).read_bytes(), (ROOT / name).read_bytes())
         third_party = (self.root / "dist/THIRD-PARTY-NOTICES.txt").read_bytes()
         for expected in (b"Fixture Python notice\r\nSecond line",

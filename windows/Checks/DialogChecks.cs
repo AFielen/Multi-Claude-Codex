@@ -2,6 +2,7 @@ using MultiClaude;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -11,10 +12,14 @@ internal static class DialogChecks
     public static void Run(MainWindow window)
     {
         var settings = (Button)window.FindName("SettingsButton");
+        window.Width = window.MinWidth;
+        window.UpdateLayout();
+        CheckCredits(window);
         void ChangeLanguage(string currentLabel, string nextCode, string nextLabel)
         {
             WithDialog(window, settings, dialog =>
             {
+                CheckCredits(dialog);
                 var picker = Find<ComboBox>(dialog, "Language");
                 CheckVisibleLabel(currentLabel);
                 picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().Single(item => Equals(item.Tag, nextCode));
@@ -120,6 +125,24 @@ internal static class DialogChecks
             Node<FrameworkElement>("CodeUsage").Visibility != Visibility.Visible)
             throw new Exception("Switching back to Claude did not restore its profile controls.");
         Console.WriteLine("PASS mixed-provider WPF creation, editing, search and account-specific controls");
+    }
+
+    private static void CheckCredits(Window surface)
+    {
+        var links = VisualChildren(surface).OfType<TextBlock>()
+            .Where(block => block.IsVisible)
+            .SelectMany(block => block.Inlines.OfType<Hyperlink>())
+            .Select(link => (Label: string.Concat(link.Inlines.OfType<Run>().Select(run => run.Text)), Target: link.NavigateUri))
+            .ToList();
+        foreach (var (name, target) in new[]
+        {
+            ("Based on Multi Claude, created by Richard KPL", "https://github.com/RichardKPL"),
+            ("Axel (AFielen)", "https://github.com/AFielen/Multi-Claude-Codex")
+        })
+        {
+            if (!links.Any(link => link.Target?.AbsoluteUri == target && link.Label.Contains(name)))
+                throw new Exception($"Missing visible credit and project link for '{name}' in {surface.Title}. Found: {string.Join(", ", links)}");
+        }
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

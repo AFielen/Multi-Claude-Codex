@@ -30,23 +30,31 @@ internal static class CodexProfileChecks
                         Environment.GetEnvironmentVariable("OPENAI_API_KEY") == null ? "" : "set", String.Join(" ", args)};
                     File.WriteAllLines(file + ".tmp", lines);
                     File.Move(file + ".tmp", file);
-                    if (desktop) Application.Run(new Form { ShowInTaskbar = false, Opacity = 0 });
+                    if (desktop) Application.Run(new Form {
+                        Opacity = 0, ShowInTaskbar = true, StartPosition = FormStartPosition.Manual,
+                        Location = new System.Drawing.Point(-30000, -30000)
+                    });
                 }
             }
             """);
         var compiler = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
         var build = new ProcessStartInfo(compiler) { UseShellExecute = false, CreateNoWindow = true };
-        foreach (string arg in new[]{"/nologo", "/target:winexe", "/out:" + fixture, "/r:System.Windows.Forms.dll", source})
+        string icon = Path.Combine(home, "fixture.ico");
+        using (var file = File.Create(icon)) System.Drawing.SystemIcons.Information.Save(file);
+        foreach (string arg in new[]{"/nologo", "/target:winexe", "/out:" + fixture, "/win32icon:" + icon,
+                     "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll", source})
             build.ArgumentList.Add(arg);
         using (var process = Process.Start(build)!)
             if (!process.WaitForExit(20000) || process.ExitCode != 0) throw new Exception("Could not compile Codex fixture.");
         File.Copy(fixture, cli);
         string Resolve(ProfileProvider provider, string path) =>
             provider == ProfileProvider.Codex ? path : throw new Exception("Codex profile dispatched to Claude");
-        var manager = new WindowsIntegration(home, provider => Resolve(provider, fixture), provider => Resolve(provider, cli));
-        var desktops = new DesktopWindows(ProfileProvider.Codex);
+        using var manager = new WindowsIntegration(home, provider => Resolve(provider, fixture), provider => Resolve(provider, cli));
+        using var desktops = new DesktopWindows(ProfileProvider.Codex);
+        using var claude = new DesktopWindows();
         var profiles = new[] { personal, work };
+        manager.SyncProfiles(profiles);
         try
         {
             try
@@ -75,10 +83,28 @@ internal static class CodexProfileChecks
             var b = desktops.Matching(work.DesktopPath);
             if (a.Count != 1 || b.Count != 1 || a[0] == b[0])
                 throw new Exception("Concurrent Codex windows were not identified separately.");
-            if (!SpinWait.SpinUntil(() => profiles.All(manager.IsRunning), TimeSpan.FromSeconds(5)))
-                throw new Exception("The manager's status snapshot did not report both Codex windows.");
-            if (new DesktopWindows().Matching(personal.DesktopPath, fresh: true).Count != 0)
+            using var first = Process.GetProcessById(a[0]);
+            using var second = Process.GetProcessById(b[0]);
+            bool HasGroup(Process process)
+            {
+                process.Refresh();
+                return process.MainWindowHandle != 0 &&
+                    TaskbarGroup.Read(process.MainWindowHandle, TaskbarGroup.AppId)?.StartsWith("RichardKPL.MultiClaude.Profile.") == true;
+            }
+            if (!SpinWait.SpinUntil(() => profiles.All(manager.IsRunning) && HasGroup(first) && HasGroup(second), TimeSpan.FromSeconds(10)))
+                throw new Exception("The manager did not assign taskbar groups to both running Codex windows.");
+            var groupA = TaskbarGroup.Read(first.MainWindowHandle, TaskbarGroup.AppId);
+            var groupB = TaskbarGroup.Read(second.MainWindowHandle, TaskbarGroup.AppId);
+            if (groupA == groupB || (TaskbarGroup.Read(second.MainWindowHandle, TaskbarGroup.RelaunchCommand)?.Contains(work.CodeKey) == true &&
+                    TaskbarGroup.Read(second.MainWindowHandle, TaskbarGroup.RelaunchName) != "Codex · Work"))
+                throw new Exception("Codex windows must have separate taskbar groups and a provider-specific relaunch name.");
+            if (claude.Matching(personal.DesktopPath, fresh: true).Count != 0)
                 throw new Exception("Claude matched a Codex window.");
+            manager.SyncProfiles([work]);
+            if (HasGroup(first) || !HasGroup(second))
+                throw new Exception("Removing a Codex profile should restore only its taskbar group.");
+            manager.Dispose();
+            if (HasGroup(second)) throw new Exception("Disposing the manager did not restore the Codex taskbar group.");
             manager.CloseDesktop(personal);
             if (!manager.IsRunning(work)) throw new Exception("Closing one profile affected the other.");
             if (Usage.SetCapture(work, true) || Directory.Exists(Path.Combine(home, "claude-code")))

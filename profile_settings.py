@@ -30,7 +30,7 @@ def require_claude_catalog(con, profile_key=None):
     row = con.execute(sql if profile_key is None else sql + " AND code_key=?",
                       () if profile_key is None else (profile_key,)).fetchone()
     if row:
-        raise OSError("Open this profile catalog with the Multi Claude + Codex Windows (WPF) edition.")
+        raise OSError("Open this profile catalog with the Multi Claude Codex Windows (WPF) edition.")
 
 
 def migrate(con):

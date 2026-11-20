@@ -8,6 +8,9 @@ namespace MultiClaude;
 
 public partial class MainWindow
 {
+    public static Uri OriginalAuthorUri { get; } = new("https://github.com/RichardKPL");
+    public static Uri CodexRepositoryUri { get; } = new("https://github.com/AFielen/Multi-Claude-Codex");
+
     private static readonly (string Key, string Name)[] Languages =
     [
         ("pt", "Português (BR)"), ("en", "English"), ("es", "Español"), ("fr", "Français"),
@@ -92,15 +95,21 @@ public partial class MainWindow
         imports.HorizontalAlignment = HorizontalAlignment.Left;
         dialog.Fields.Children.Add(imports);
         Note(dialog.Fields, T("sobre"), true);
-        Note(dialog.Fields, "Multi Claude + Codex 2.3.0 · WPF · Modified edition");
+        Note(dialog.Fields, "Multi Claude Codex 2.3.0 · WPF");
         var author = Note(dialog.Fields, "");
-        var link = new Hyperlink(new Run("Based on Multi Claude, created by Richard KPL")) { ToolTip = "https://github.com/RichardKPL" };
-        link.Click += AuthorClick;
-        author.Inlines.Add(link);
+        AddCredit("Multi Claude Codex · © 2026 Axel (AFielen)", CodexRepositoryUri);
+        author.Inlines.Add(new LineBreak());
+        AddCredit("Based on Multi Claude, created by Richard KPL", OriginalAuthorUri);
+        void AddCredit(string label, Uri target)
+        {
+            var link = new Hyperlink(new Run(label)) { NavigateUri = target, ToolTip = target.AbsoluteUri };
+            link.RequestNavigate += OpenCreditLink;
+            author.Inlines.Add(link);
+        }
         Note(dialog.Fields, "© 2026 Richard KPL · GPL-3.0\n" + T("direitos") + "\n" + T("nao_oficial"));
         var links = new WrapPanel();
-        links.Children.Add(MakeButton(T("codigo"), () => Safe(() => OpenInShell("https://github.com/RichardKPL/multi-claude"))));
-        links.Children.Add(MakeButton(T("licenca"), () => Safe(() => OpenInShell("https://github.com/RichardKPL/multi-claude/blob/main/LICENSE"))));
+        links.Children.Add(MakeButton(T("codigo"), () => Safe(() => OpenInShell(CodexRepositoryUri.AbsoluteUri))));
+        links.Children.Add(MakeButton(T("licenca"), () => Safe(() => OpenInShell(CodexRepositoryUri.AbsoluteUri + "/blob/main/LICENSE"))));
         dialog.Fields.Children.Add(links);
         Note(dialog.Fields, T("perigo"), true);
         Note(dialog.Fields, T("apagar_tudo_sub"));

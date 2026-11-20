@@ -58,7 +58,9 @@ APP = "Multi Claude"
 VERSAO = "2.3.0"
 AUTOR = "Richard KPL"
 GITHUB = "https://github.com/RichardKPL"
-REPO = "https://github.com/RichardKPL/multi-claude"
+REPO_ORIGINAL = "https://github.com/RichardKPL/multi-claude"
+REPO = "https://github.com/AFielen/Multi-Claude-Codex"
+AUTOR_EDICAO = "Axel (AFielen)"
 COPYRIGHT = f"© 2026 {AUTOR}"
 ATRIBUICAO = "Based on Multi Claude, created by Richard KPL"
 
@@ -1535,20 +1537,26 @@ class App(tk.Tk):
         # Rodapé com copyright
         rodape = tk.Frame(self, bg=C["BG"])
         rodape.pack(side="bottom", fill="x", padx=10, pady=(0, 2))
-        self.footer_text = tk.StringVar(self, f"v{VERSAO} · Modified edition")
-        versao = tk.Label(rodape, textvariable=self.footer_text, bg=C["BG"], fg=C["SUB"],
+        edicao = tk.Frame(rodape, bg=C["BG"])
+        autor = tk.Label(edicao, text=f"Codex · {AUTOR_EDICAO}", bg=C["BG"], fg=C["SUB"],
+                         font=(FONTE, 8, "underline"), cursor="hand2")
+        autor.pack(side="left", padx=(0, 4))
+        autor.bind("<Button-1>", lambda e: webbrowser.open(REPO))
+        self.footer_text = tk.StringVar(self, f"v{VERSAO}")
+        versao = tk.Label(edicao, textvariable=self.footer_text, bg=C["BG"], fg=C["SUB"],
                           font=(FONTE, 8), anchor="w")
-        version_width = versao.winfo_reqwidth()
+        edition_width = autor.winfo_reqwidth() + 4 + versao.winfo_reqwidth()
         versao.configure(width=1)
+        versao.pack(side="left", fill="x", expand=True)
         link = tk.Label(rodape, text=ATRIBUICAO, bg=C["BG"], fg=C["SUB"], font=(FONTE, 8, "underline"),
                         cursor="hand2")
         link.pack(side="right")
-        versao.pack(side="left", fill="x", expand=True)
+        edicao.pack(side="left", fill="x", expand=True)
         link.bind("<Button-1>", lambda e: webbrowser.open(GITHUB))
         def dispor_rodape(evento):
-            lado = "left" if evento.width >= version_width + link.winfo_reqwidth() + 8 else "top"
-            if versao.winfo_manager() == "pack" and versao.pack_info().get("side") != lado:
-                versao.pack_configure(side=lado)
+            lado = "left" if evento.width >= edition_width + link.winfo_reqwidth() + 8 else "top"
+            if edicao.pack_info().get("side") != lado:
+                edicao.pack_configure(side=lado)
                 link.pack_configure(side="right" if lado == "left" else "top")
         rodape.bind("<Configure>", dispor_rodape)
 
@@ -1623,7 +1631,12 @@ class App(tk.Tk):
                  anchor="w").pack(fill="x", padx=14, pady=(12, 0))
         tk.Label(sobre, text=f"{self.t('versao')} {VERSAO}", bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w").pack(fill="x", padx=14)
-        tk.Label(sobre, text=f"{ATRIBUICAO}\n{COPYRIGHT}. {self.t('direitos')}", justify="left",
+        for texto, url in ((f"Multi Claude Codex · © 2026 {AUTOR_EDICAO}", REPO), (ATRIBUICAO, GITHUB)):
+            credito = tk.Label(sobre, text=texto, bg=C["CARD"], fg=C["ACCENT"],
+                               font=(FONTE, 9, "underline"), cursor="hand2")
+            credito.pack(anchor="w", padx=14)
+            credito.bind("<Button-1>", lambda e, url=url: webbrowser.open(url))
+        tk.Label(sobre, text=f"{COPYRIGHT}. {self.t('direitos')}", justify="left",
                  bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w").pack(fill="x", padx=14, pady=(6, 0))
         tk.Label(sobre, text=self.t("nao_oficial"), bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
@@ -1631,7 +1644,7 @@ class App(tk.Tk):
         links = tk.Frame(sobre, bg=C["CARD"])
         links.pack(fill="x", padx=14, pady=(6, 12))
         for texto, url in ((self.t("codigo"), REPO), (self.t("licenca") + " GPL-3.0", REPO + "/blob/main/LICENSE"),
-                           ("github.com/RichardKPL", GITHUB)):
+                           ("RichardKPL/multi-claude", REPO_ORIGINAL)):
             lk = tk.Label(links, text=texto, bg=C["CARD"], fg=C["ACCENT"], font=(FONTE, 9, "underline"),
                           cursor="hand2")
             lk.pack(side="left", padx=(0, 14))
@@ -2595,7 +2608,7 @@ class App(tk.Tk):
             self.footer_text.set(text)
             def clear():
                 self.feedback_timer = None
-                self.footer_text.set(f"v{VERSAO} · Modified edition")
+                self.footer_text.set(f"v{VERSAO}")
             self.feedback_timer = self.after(4000, clear)
 
     def precisa_claude(self):
