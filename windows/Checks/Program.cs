@@ -170,6 +170,7 @@ internal static class CheckRunner
             if (firstReading.IsVisible || resourceText.IsVisible || list.SelectedIndex != 0)
                 throw new Exception("New resource sample changed selection or left stale counters for a closed profile.");
             if (catalog.Get("selected_code_key") != first.CodeKey) throw new Exception("Selection not persisted.");
+            DesktopCloseChecks.Run(window, first, desktopFixture);
             DialogChecks.Run(window);
             ManagerMenuChecks.Run(window, catalog, desktopFixture, () => Volatile.Read(ref resourceSamples));
             CheckTrayLifecycle(window);

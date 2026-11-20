@@ -1,0 +1,61 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Interop;
+using System.Windows.Threading;
+using MultiClaude;
+
+internal static class DesktopCloseChecks
+{
+    public static void Run(MainWindow window, Profile profile, string fixtureRoot)
+    {
+        string ready = Path.Combine(fixtureRoot, "close-button.ready");
+        string gate = ready + ".continue";
+        var start = new ProcessStartInfo(Path.Combine(fixtureRoot, "AnthropicClaude", "claude.exe")) { UseShellExecute = false };
+        start.ArgumentList.Add("--user-data-dir=" + profile.DesktopPath);
+        start.ArgumentList.Add(ready);
+        start.Environment["MULTI_CLAUDE_FIXTURE_TRAY"] = "1";
+        start.Environment["MULTI_CLAUDE_FIXTURE_SAVE_GATE"] = gate;
+        using var desktop = Process.Start(start)!;
+        try
+        {
+            var button = (Button)window.FindName("CloseDesktopButton");
+            CheckRunner.PumpUntil(() => File.Exists(ready) && button.IsVisible && button.IsEnabled,
+                "the visible manager to offer Close for the selected desktop");
+            nint manager = new WindowInteropHelper(window).Handle;
+            int warning = 0;
+            using var dismissWarning = new Timer(_ =>
+            {
+                nint popup = GetWindow(manager, 6 /* GW_ENABLEDPOPUP */);
+                if (popup == 0 || popup == manager || GetDlgItem(popup, 1 /* IDOK */) == 0) return;
+                Interlocked.Exchange(ref warning, 1);
+                PostMessageW(popup, 0x0111 /* WM_COMMAND */, 1, 0);
+            }, null, 0, 100);
+
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            CheckRunner.PumpUntil(() => Volatile.Read(ref warning) != 0 || File.Exists(gate + ".saving"),
+                "the selected desktop to start saving");
+            if (Volatile.Read(ref warning) != 0) throw new Exception("Close displayed a warning before the desktop could exit.");
+            (bool Exited, bool CloseEnabled)? duringSave = null;
+            window.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            {
+                duringSave = (desktop.HasExited, button.IsEnabled);
+                File.WriteAllText(gate, "continue");
+            }));
+            CheckRunner.PumpUntil(() => duringSave.HasValue, "input while the selected desktop is saving");
+            if (duringSave is { Exited: true }) throw new Exception("Close blocked dispatcher input until the selected desktop exited.");
+            if (duringSave is { CloseEnabled: true }) throw new Exception("Close allowed a duplicate click while the desktop was saving.");
+            CheckRunner.PumpUntil(() => Volatile.Read(ref warning) != 0 || desktop.HasExited && !button.IsVisible && button.IsEnabled,
+                "a single Close click to exit the tray-resident desktop and show its closed status");
+            if (Volatile.Read(ref warning) != 0 || !File.Exists(ready + ".closed"))
+                throw new Exception("Graceful Close must finish without a warning and clear its pending state.");
+            Console.WriteLine("PASS visible manager closes a tray-resident desktop with one click while processing input");
+        }
+        finally { if (!desktop.HasExited) { desktop.Kill(); desktop.WaitForExit(); } }
+    }
+
+    [DllImport("user32.dll")] private static extern nint GetWindow(nint hwnd, uint command);
+    [DllImport("user32.dll")] private static extern nint GetDlgItem(nint dialog, int id);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(nint hwnd, uint message, nint wParam, nint lParam);
+}

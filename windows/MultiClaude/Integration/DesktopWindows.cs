@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -16,22 +17,19 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
 
     internal IReadOnlySet<string> Folders() => Roots().ByFolder.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    internal (IReadOnlyDictionary<string, List<int>> ByFolder, long ObservedByUtcTicks) Roots()
+    internal (IReadOnlyDictionary<string, List<int>> ByFolder, long ObservedByUtcTicks) Roots(bool fresh = false, bool strict = false)
     {
         lock (gate)
         {
-            Refresh(false, false);
+            Refresh(fresh, strict);
             return (snapshot, observedByUtcTicks);
         }
     }
 
     internal IReadOnlyList<int> Matching(string folder, bool fresh = false, bool strict = false)
     {
-        lock (gate)
-        {
-            Refresh(fresh, strict);
-            return snapshot.TryGetValue(folder, out var pids) ? pids : [];
-        }
+        var (byFolder, _) = Roots(fresh, strict);
+        return byFolder.TryGetValue(folder, out var pids) ? pids : [];
     }
 
     private void Refresh(bool fresh, bool strict)
@@ -209,9 +207,38 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
         return profile.Border && borderSet;
     }
 
-    internal static void Close(IReadOnlyList<int> pids)
+    internal void CloseProfile(string folder)
     {
-        foreach (var hwnd in Windows(pids)) if (pids.Contains(Pid(hwnd))) PostMessageW(hwnd, 0x10, 0, 0);
+        var (roots, observedBy) = Roots(fresh: true, strict: true);
+        if (!roots.TryGetValue(folder, out var pids)) return;
+        var targets = new List<ProcessRoot>();
+        foreach (int pid in pids)
+        {
+            using var handle = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+            if (handle.IsInvalid || CodeProcessRegistry.Identity(pid, handle) is not { } identity
+                || identity.StartedUtcTicks > observedBy) continue;
+            targets.Add(identity);
+            foreach (var hwnd in Windows([pid]))
+                if (Pid(hwnd) == pid) PostMessageW(hwnd, 0x10 /* WM_CLOSE */, 0, 0);
+        }
+
+        var timer = Stopwatch.StartNew();
+        while (true)
+        {
+            var remaining = Matching(folder, fresh: true, strict: true);
+            if (remaining.Count == 0) return;
+            // Electron may hide its last window in the tray. Leave visible prompts to the user.
+            if (targets.Count > 0 && Windows(remaining).Count == 0)
+            {
+                try { DesktopShutdown.Request(targets.Where(p => remaining.Contains(p.Pid)).ToArray()); }
+                catch (Win32Exception) when (Matching(folder, fresh: true, strict: true).Count == 0) { return; }
+                targets.Clear();
+                continue;
+            }
+            if (timer.ElapsedMilliseconds >= 3500)
+                throw new IOException($"Bitte {provider} für dieses Profil beenden und den Vorgang erneut starten.");
+            Thread.Sleep(150);
+        }
     }
 
     private delegate bool EnumProc(nint hwnd, nint data);
