@@ -212,20 +212,13 @@ public sealed class WindowsIntegration : IDisposable
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or JsonException) { return false; }
     }
 
-    public void CloseDesktop(Profile p)
+    public void CloseDesktop(Profile p) => CloseDesktopAsync(p).GetAwaiter().GetResult();
+
+    internal Task CloseDesktopAsync(Profile p)
     {
         if (login?.Key == p.CodeKey) login = null;
-        var windows = Windows(p.Provider);
-        var pids = windows.Matching(p.DesktopPath, fresh: true, strict: true);
-        if (pids.Count == 0) return;
-        DesktopWindows.Close(pids);
-        var timer = Stopwatch.StartNew();
-        while (timer.ElapsedMilliseconds < 3500)
-        {
-            Thread.Sleep(150);
-            if (windows.Matching(p.DesktopPath, fresh: true, strict: true).Count == 0) return;
-        }
-        throw new IOException($"Bitte {p.Provider} für dieses Profil beenden und den Vorgang erneut starten.");
+        pending.Remove(p.DesktopPath);
+        return Task.Run(() => Windows(p.Provider).CloseProfile(p.DesktopPath));
     }
 
     public void SignOut(Profile p)

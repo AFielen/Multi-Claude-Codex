@@ -56,15 +56,26 @@ public partial class MainWindow
         dialog.ShowDialog();
         field.Clear();
     });
-    private void CloseClick(object sender, RoutedEventArgs e) => Safe(() =>
+    private void CloseClick(object sender, RoutedEventArgs e)
     {
         if (selected is { } p) CloseProfile(p);
-    });
-    private void CloseProfile(Profile p)
+    }
+    private async void CloseProfile(Profile p)
     {
-        if (p.CodeKey == loginProfile?.CodeKey) EndLogin();
-        integration.CloseDesktop(p);
-        StartStatusRead();
+        if (ModalOpen) return;
+        IsEnabled = false;
+        try
+        {
+            if (p.CodeKey == loginProfile?.CodeKey) EndLogin();
+            await integration.CloseDesktopAsync(p);
+            if (Feedback.Text == Format("opening", "n", p.Name)) Feedback.Text = "";
+        }
+        catch (Exception error) { if (!closed) Error(this, error); }
+        finally
+        {
+            IsEnabled = true;
+            StartStatusRead();
+        }
     }
     private void LogoutClick(object sender, RoutedEventArgs e) => Safe(() =>
     {

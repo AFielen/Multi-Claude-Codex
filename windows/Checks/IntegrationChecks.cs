@@ -115,7 +115,15 @@ internal static class IntegrationChecks
             using System.Drawing;
             using System.Windows.Forms;
             internal class FixtureWindow : Form {
+                readonly bool closeToTray = Environment.GetEnvironmentVariable("MULTI_CLAUDE_FIXTURE_TRAY") == "1";
                 protected override bool ShowWithoutActivation { get { return true; } }
+                protected override void WndProc(ref Message m) {
+                    if (closeToTray && m.Msg == 0x0010 /* WM_CLOSE */) {
+                        Hide();
+                        return;
+                    }
+                    base.WndProc(ref m);
+                }
                 [STAThread] static void Main(string[] args) {
                     if (args.Length != 2 || !args[1].EndsWith(".ready", StringComparison.Ordinal)) {
                         var folder = args[0].Substring("--user-data-dir=".Length);
@@ -130,6 +138,15 @@ internal static class IntegrationChecks
                     window.Location = new Point(-30000, -30000);
                     window.ShowInTaskbar = true;
                     window.Text = "Multi Claude test · " + System.IO.Path.GetFileName(args[1]);
+                    if (window.closeToTray)
+                        window.FormClosed += delegate {
+                            string gate = Environment.GetEnvironmentVariable("MULTI_CLAUDE_FIXTURE_SAVE_GATE");
+                            if (gate != null) {
+                                System.IO.File.WriteAllText(gate + ".saving", "saving");
+                                System.Threading.SpinWait.SpinUntil(delegate { return System.IO.File.Exists(gate); }, 2000);
+                            }
+                            System.IO.File.WriteAllText(args[1] + ".closed", "closed");
+                        };
                     window.Shown += delegate { System.IO.File.WriteAllText(args[1], "ready"); };
                     Application.Run(window);
                 }
@@ -145,15 +162,16 @@ internal static class IntegrationChecks
             Check(compile.WaitForExit(20000) && compile.ExitCode == 0, "Build two synthetic Desktop windows");
         }
         string first = Path.Combine(root, "First desktop"), second = Path.Combine(root, "Second desktop");
-        Process Start(string path)
+        Process Start(string path, bool closeToTray)
         {
             var start = new ProcessStartInfo(program) { UseShellExecute = false, CreateNoWindow = true };
             start.ArgumentList.Add("--user-data-dir=" + path);
             start.ArgumentList.Add(path + ".ready");
+            start.Environment["MULTI_CLAUDE_FIXTURE_TRAY"] = closeToTray ? "1" : "0";
             return Process.Start(start)!;
         }
-        using var a = Start(first);
-        using var b = Start(second);
+        using var a = Start(first, closeToTray: true);
+        using var b = Start(second, closeToTray: false);
         try
         {
             Check(SpinWait.SpinUntil(() => File.Exists(first + ".ready") && File.Exists(second + ".ready"),
@@ -194,13 +212,17 @@ internal static class IntegrationChecks
             var initial = monitor.ReadProcessResources(profiles);
             Check(initial.Count == 2 && profiles.All(p => initial[p.CodeKey] is { CpuPercent: null, RamBytes: > 0 }),
                 "Both live Desktop profiles should report their own RAM before a CPU interval is available");
-            DesktopWindows.Close(pidA);
-            Check(a.WaitForExit(5000) && !b.HasExited, "Graceful close affected only the selected Desktop");
+            SendMessageW(hwndA, 0x0010 /* WM_CLOSE */, 0, 0);
+            Check(!IsWindowVisible(hwndA) && processes.Matching(first, fresh: true).SequenceEqual([a.Id]),
+                "Closing the fixture window should leave its Desktop in the tray");
+            monitor.CloseDesktop(profiles[0]);
+            Check(a.HasExited && File.Exists(first + ".ready.closed") && !b.HasExited && IsWindowVisible(hwndB),
+                "Closing a tray-resident Desktop must allow a graceful exit and keep the other profile open");
             var remaining = monitor.ReadProcessResources(profiles);
             Check(remaining.Count == 1 && remaining.TryGetValue(profiles[1].CodeKey, out var stillOpen)
                 && stillOpen is { CpuPercent: >= 0 and <= 100, RamBytes: > 0 }, "A closed profile cannot retain a reading");
-            DesktopWindows.Close(pidB);
-            Check(b.WaitForExit(5000), "Second Desktop closed gracefully");
+            monitor.CloseDesktop(profiles[1]);
+            Check(b.HasExited, "Second Desktop closed gracefully");
         }
         finally
         {
@@ -267,6 +289,7 @@ internal static class IntegrationChecks
 
     [DllImport("user32.dll")] private static extern bool PostMessageW(nint hwnd, uint message, nint wparam, nint lparam);
     [DllImport("user32.dll")] private static extern nint SendMessageW(nint hwnd, uint message, nint wparam, nint lparam);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(nint hwnd, int token, uint mods, uint key);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(nint hwnd, int token);
 

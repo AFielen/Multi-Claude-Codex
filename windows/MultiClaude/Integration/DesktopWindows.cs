@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -16,22 +17,19 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
 
     internal IReadOnlySet<string> Folders() => Roots().ByFolder.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    internal (IReadOnlyDictionary<string, List<int>> ByFolder, long ObservedByUtcTicks) Roots()
+    internal (IReadOnlyDictionary<string, List<int>> ByFolder, long ObservedByUtcTicks) Roots(bool fresh = false, bool strict = false)
     {
         lock (gate)
         {
-            Refresh(false, false);
+            Refresh(fresh, strict);
             return (snapshot, observedByUtcTicks);
         }
     }
 
     internal IReadOnlyList<int> Matching(string folder, bool fresh = false, bool strict = false)
     {
-        lock (gate)
-        {
-            Refresh(fresh, strict);
-            return snapshot.TryGetValue(folder, out var pids) ? pids : [];
-        }
+        var (byFolder, _) = Roots(fresh, strict);
+        return byFolder.TryGetValue(folder, out var pids) ? pids : [];
     }
 
     private void Refresh(bool fresh, bool strict)
@@ -57,7 +55,9 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
                     string? command = Property(row, "CommandLine") as string;
                     if (string.IsNullOrEmpty(command))
                     {
-                        if (strict) throw new IOException($"Windows konnte eine laufende {provider}-Instanz nicht zuordnen.");
+                        // WMI can still enumerate a process after Windows has discarded its command line.
+                        if (strict && !WaitForReportedProcessExit(Convert.ToInt32(Property(row, "ProcessId"))))
+                            throw new IOException($"Windows konnte eine laufende {provider}-Instanz nicht zuordnen.");
                         continue;
                     }
                     string? folder = FolderFromCommand(command, strict);
@@ -77,6 +77,13 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
         snapshot = byFolder;
         observedByUtcTicks = beforeQuery;
         readAt = Environment.TickCount64;
+    }
+
+    private static bool WaitForReportedProcessExit(int pid)
+    {
+        using var handle = OpenProcess(0x100000 /* SYNCHRONIZE */, false, pid);
+        if (handle.IsInvalid) return Marshal.GetLastPInvokeError() == 87; // ERROR_INVALID_PARAMETER: PID no longer exists.
+        return WaitForSingleObject(handle, 3500) == 0; // WAIT_OBJECT_0: process has exited.
     }
 
     private static object? Property(dynamic row, string name)
@@ -209,15 +216,45 @@ internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.
         return profile.Border && borderSet;
     }
 
-    internal static void Close(IReadOnlyList<int> pids)
+    internal void CloseProfile(string folder)
     {
-        foreach (var hwnd in Windows(pids)) if (pids.Contains(Pid(hwnd))) PostMessageW(hwnd, 0x10, 0, 0);
+        var (roots, observedBy) = Roots(fresh: true, strict: true);
+        if (!roots.TryGetValue(folder, out var pids)) return;
+        var targets = new List<ProcessRoot>();
+        foreach (int pid in pids)
+        {
+            using var handle = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+            if (handle.IsInvalid || CodeProcessRegistry.Identity(pid, handle) is not { } identity
+                || identity.StartedUtcTicks > observedBy) continue;
+            targets.Add(identity);
+            foreach (var hwnd in Windows([pid]))
+                if (Pid(hwnd) == pid) PostMessageW(hwnd, 0x10 /* WM_CLOSE */, 0, 0);
+        }
+
+        var timer = Stopwatch.StartNew();
+        while (true)
+        {
+            var remaining = Matching(folder, fresh: true, strict: true);
+            if (remaining.Count == 0) return;
+            // Electron may hide its last window in the tray. Leave visible prompts to the user.
+            if (targets.Count > 0 && Windows(remaining).Count == 0)
+            {
+                try { DesktopShutdown.Request(targets.Where(p => remaining.Contains(p.Pid)).ToArray()); }
+                catch (Win32Exception) when (Matching(folder, fresh: true, strict: true).Count == 0) { return; }
+                targets.Clear();
+                continue;
+            }
+            if (timer.ElapsedMilliseconds >= 3500)
+                throw new IOException($"Bitte {provider} für dieses Profil beenden und den Vorgang erneut starten.");
+            Thread.Sleep(150);
+        }
     }
 
     private delegate bool EnumProc(nint hwnd, nint data);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern nint CommandLineToArgvW(string commandLine, out int count);
     [DllImport("kernel32.dll")] private static extern nint LocalFree(nint ptr);
-    [DllImport("kernel32.dll")] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)] private static extern SafeProcessHandle OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] private static extern uint WaitForSingleObject(SafeProcessHandle handle, uint milliseconds);
     [DllImport("kernel32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageNameW(SafeProcessHandle process, uint flags, StringBuilder path, ref int size);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback, nint data);
