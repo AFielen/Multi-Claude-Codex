@@ -19,7 +19,8 @@ RAIZ = Path(__file__).resolve().parents[1]
 EXE = "Multi Claude.exe"
 AVISOS_TERCEIROS = "THIRD-PARTY-NOTICES.txt"
 MODULOS = ("profile_code.py", "profile_settings.py", "profile_shortcut.py", "profile_text.py",
-           "profile_translations.py", "profile_tray.py", "profile_usage.py", "windows_profiles.py")
+           "profile_switcher.py", "profile_translations.py", "profile_tray.py", "profile_usage.py",
+           "windows_profiles.py", "workspace_usage.py")
 # Arquivos de distribuição revisados. A galeria também aceita imagens particulares.
 RECURSOS_PADRAO = {
     "recursos/icone.ico": "0513afe73f9f85561ba1feb49b0b5ebd3250ad0afc26d000d0dcc4fb2d3a0350",

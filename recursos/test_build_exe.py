@@ -40,7 +40,8 @@ class BuildTests(unittest.TestCase):
         self.assets.extend(Path("profile_pictures", name) for name in PORTRAITS)
         script = Path("recursos/build_exe.py")
         self.modules = [Path(name + ".py") for name in ("profile_code", "profile_settings", "profile_shortcut",
-                        "profile_text", "profile_translations", "profile_tray", "profile_usage", "windows_profiles")]
+                        "profile_switcher", "profile_text", "profile_translations", "profile_tray", "profile_usage",
+                        "windows_profiles", "workspace_usage")]
         for path in [*self.assets, *self.modules, script]:
             target = self.root / path
             target.parent.mkdir(exist_ok=True)

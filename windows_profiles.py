@@ -115,10 +115,17 @@ def _native():
     return _Windows()
 
 
+def _manager_identity(base):
+    # Windows realpath expands DOS short names. Only coordination uses this canonical spelling.
+    return os.path.normcase(os.path.realpath(base))
+
+
+def manager_mutex_name(base):
+    return "MultiClaude_" + hashlib.md5(_manager_identity(base).encode()).hexdigest()[:16]
+
+
 def _manager_property(base):
-    # Use the same case and path equivalence as the per-base application mutex.
-    path = os.path.normcase(os.path.abspath(base))
-    return "MultiClaude.Manager." + hashlib.sha256(os.fsencode(path)).hexdigest()
+    return "MultiClaude.Manager." + hashlib.sha256(os.fsencode(_manager_identity(base))).hexdigest()
 
 
 def mark_manager_window(root, base):

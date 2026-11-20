@@ -3,10 +3,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import ctypes
 from ctypes import wintypes as wt
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import tkinter as tk
 import unittest
@@ -156,6 +158,46 @@ class TkMessageTests(unittest.TestCase):
             root.destroy()
             unregister.assert_called_once_with(hwnd, token)
             manager.close()
+
+
+class ManagerIdentityTests(unittest.TestCase):
+    def test_ordinary_long_path_keeps_previous_mutex_and_window_property(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve() / "Normal portable home"
+            base.mkdir()
+            previous = os.path.normcase(os.path.normpath(str(base)))
+            self.assertEqual(profiles._manager_property(base),
+                             "MultiClaude.Manager." + hashlib.sha256(os.fsencode(previous)).hexdigest())
+            self.assertEqual(profiles.manager_mutex_name(base),
+                             "MultiClaude_" + hashlib.md5(previous.encode()).hexdigest()[:16])
+
+    def test_short_and_long_names_select_same_window_mutex_and_update_guard(self):
+        from recursos import prepare_portable_update as updater
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        short_name = profiles._bind(kernel, "GetShortPathNameW", wt.DWORD, wt.LPCWSTR, wt.LPWSTR, wt.DWORD)
+        create = profiles._bind(kernel, "CreateMutexW", wt.HANDLE, ctypes.c_void_p, wt.BOOL, wt.LPCWSTR)
+        close = profiles._bind(kernel, "CloseHandle", wt.BOOL, wt.HANDLE)
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp).resolve() / "Example portable manager directory"
+            base.mkdir()
+            size = short_name(str(base), None, 0)
+            if not size:
+                self.skipTest("8.3 names unavailable on the fixture volume")
+            alias = ctypes.create_unicode_buffer(size)
+            self.assertTrue(short_name(str(base), alias, size))
+            if os.path.normcase(str(base)) == os.path.normcase(alias.value):
+                self.skipTest("8.3 name generation disabled on the fixture volume")
+            self.assertTrue(os.path.samefile(base, alias.value))
+            self.assertEqual(profiles._manager_property(base), profiles._manager_property(alias.value))
+            mutex = profiles.manager_mutex_name(base)
+            self.assertEqual(mutex, profiles.manager_mutex_name(alias.value))
+            handle = create(None, False, mutex)
+            self.assertTrue(handle)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "still running"):
+                    updater._require_idle(Path(alias.value))
+            finally:
+                close(handle)
 
 
 class ForegroundPermissionTests(unittest.TestCase):

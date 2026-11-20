@@ -96,7 +96,7 @@ class LifecycleTests(unittest.TestCase):
         ui = Mock()
         ui.perfis.return_value = []
         with patch.object(app, "claudes_abertos") as inspect:
-            self.assertEqual(app.App.calcular_estado(ui), {})
+            self.assertEqual(app.App.calcular_estado([]), ({}, {}))
         inspect.assert_not_called()
 
     def test_expired_dialog_cannot_submit_to_another_profile(self):
@@ -163,8 +163,7 @@ class LifecycleTests(unittest.TestCase):
     def test_finished_native_login_expires_pending_input(self):
         ui = Mock()
         ui.login_perfil = (1, "Test", "example", None)
-        ui.calcular_estado.return_value = {"example": (True, True)}
-        app.App.atualizar_estado(ui)
+        app.App.accept_status(ui, {"example": (True, True)})
         ui.cancelar_login.assert_called_once()
 
     def test_empty_store_lookup_never_uses_an_executable_from_working_directory(self):

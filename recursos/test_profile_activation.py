@@ -74,11 +74,12 @@ class ProfileActivationTests(unittest.TestCase):
     def test_foreground_denial_keeps_both_instances_untouched(self):
         self.processes.return_value = [(31, self.personal[2]), (40, self.work[2])]
         self.focus.return_value = windows_profiles.FocusResult.BLOCKED
-        self.ui.activate_id(self.work[0])
+        with patch.object(self.app, "dialogo") as message:
+            self.ui.activate_id(self.work[0])
+        message.assert_called_once_with(self.ui, "switch", "focus_blocked")
         self.ui.select_profile.assert_called_once_with(self.work[0])
         self.assertEqual(list(self.focus.call_args.args[0]), [40])
         self.ui.launch_desktop.assert_not_called()
-        self.ui.feedback.assert_called_once_with("focus_blocked")
         self.assertEqual(self.ui.pending_open, {})
 
     def test_repeat_open_is_coalesced_per_profile(self):

@@ -40,7 +40,7 @@ Modified edition. Based on Multi Claude, created by Richard KPL. The download ba
 | 📦 **Portable** | Newly created profiles live next to the executable. Imported profiles keep using their original directories. |
 | ⇩ **Profile import** | Finds Claude profiles that already exist on the machine (or another `perfis.db`) and imports them. |
 | 🧨 **Danger zone** | Remove manager settings and eligible Desktop data with typed confirmation. Separate Claude Code directories are retained. |
-| 📐 **Responsive layout** | A sidebar on wide windows and a profile picker on narrow windows. Window size, selection and profile order are saved. |
+| 📐 **Responsive layout** | The manager opens at 480 × 360 logical pixels. Pick a profile directly or search by name with Ctrl+K. Widen the window for a sidebar. The manager remembers your window size, selection and profile order. |
 
 <div align="center">
 <img src="docs/img/en/principal-escuro.png" width="420" alt="Multi Claude 2.1 dark theme">
@@ -65,9 +65,9 @@ Modified edition. Based on Multi Claude, created by Richard KPL. The download ba
 
 1. Choose **New profile** and set its name, picture, color and optional shortcut. **Edit profile** opens the same settings later. Windows 11 supports a profile-colored native window border.
 2. Select **Sign in** on the profile you want and complete sign-in in Claude. If the browser shows a return link for Claude Desktop, copy it, choose **Paste link** in Multi Claude, check the profile name in the dialog, paste and confirm. The manual flow requires a browser that exposes the return link.
-3. Use **Open** or **Switch to window**. A global shortcut or notification-area letter works while the manager is running. **Save Windows shortcut** creates a named launcher that also works when the manager is closed. Drag a profile onto another row or use **Move up** and **Move down**.
+3. Pick a profile and use **Open** or **Switch to window**. Ctrl+K opens profile search. Use the arrow keys and Enter to select a match. A global shortcut or notification-area letter works while the manager is running. **Edit profile** is below the profile name. In **Profile details** you can reorder the profile and save a Windows shortcut that also opens it when the manager is closed.
 4. In **Claude Code**, choose **Open terminal**, **Sign in** or **Copy command**. The terminal requires the official Windows CLI. Switching Code configuration takes effect on a fresh launch. Optional sharing connects existing skills, agents, commands and user instructions with the standard setup. Personal files already present in the isolated configuration take precedence. [Claude Code setup](https://code.claude.com/docs/en/setup)
-5. **Usage** totals the recorded responses in the selected isolated profile’s retained local history. **Enable limit readings** installs a status line in that profile. A supported account receives readings after an API response. Existing custom status lines are preserved. The panel displays the last observation and unexpired reset windows. [Claude Code status line](https://code.claude.com/docs/en/statusline#available-data)
+5. **Overview** shows the five-hour and weekly plan readings with their reset times. **Claude Code** shows token totals for the selected isolated profile’s retained local history. Refresh keeps your tab, position and previous readings visible while the new data loads. **Enable limit readings** installs a status line in that profile. A supported account receives readings after an API response. Existing custom status lines are preserved. [Claude Code status line](https://code.claude.com/docs/en/statusline#available-data)
 
 <div align="center">
 <img src="docs/img/en/boas-vindas.png" width="300" alt="Welcome screen">
@@ -94,7 +94,7 @@ profile_shortcuts\  ← profile icons for saved Windows launchers
 profile_pictures\    ← default pictures + the ones you add (usuario_*)
 ```
 
-If you move the portable folder, recreate exported Windows shortcuts and copy fresh terminal commands. Local Code settings use `CLAUDE_CONFIG_DIR` when starting the Windows CLI and Claude Desktop. Desktop authentication is separate, and remote, cloud and WSL environments have their own storage. [Desktop environment configuration](https://code.claude.com/docs/en/desktop#environment-variables-in-local-sessions)
+After moving the executable or the profile folder, recreate exported Windows shortcuts and copy fresh terminal commands. Both contain absolute paths. Local Code settings use `CLAUDE_CONFIG_DIR` when starting the Windows CLI and Claude Desktop. Desktop authentication is separate, and remote, cloud and WSL environments have their own storage. [Desktop environment configuration](https://code.claude.com/docs/en/desktop#environment-variables-in-local-sessions)
 
 ## 🛠️ Run and build from source
 

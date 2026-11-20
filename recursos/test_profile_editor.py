@@ -142,6 +142,54 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(self.ui.options[personal[0]].shortcut, "Ctrl+Alt+1")
         self.click(self.button(draft, "cancelar"))
 
+    def test_empty_name_feedback_clears_when_corrected_in_same_draft(self):
+        draft = self.edit(name="  ")
+        self.click(self.button(draft, "save"))
+        hint = self.ui.t("novo_pergunta").rstrip(":： ")
+        error = next((w for w in descendants(draft) if isinstance(w, tk.Label) and w["text"] == hint), None)
+        self.assertIsNotNone(error, "An empty name must identify the missing field")
+        self.assertTrue(error.winfo_ismapped())
+        field = next(w for w in descendants(draft) if isinstance(w, tk.Entry))
+        field.insert("end", "Studio")
+        self.ui.update()
+        self.assertFalse(error.winfo_ismapped())
+        self.assertTrue(draft.winfo_exists())
+        self.assertFalse(self.ui.perfis())
+        variables = [str(w["textvariable"]) for w in descendants(draft) if isinstance(w, tk.Entry)]
+        self.click(self.button(draft, "cancelar"))
+        for variable in variables:
+            self.assertFalse(self.ui.tk.call("trace", "info", "variable", variable))
+
+    def test_custom_color_and_editor_groups_remain_findable_when_narrow_at_200_percent(self):
+        self.ui.tk.call("tk", "scaling", 192 / 72)
+        self.ui.escala = 2
+        draft = self.edit(name="Studio")
+        draft.geometry("680x650+30000+30000")
+        self.ui.update()
+        labels = [w["text"] for w in descendants(draft) if isinstance(w, tk.Label)]
+        self.assertIn("Windows", labels)
+        self.assertIn(self.ui.t("code_settings"), labels)
+        with patch.object(self.mod.colorchooser, "askcolor", return_value=((35, 86, 116), "#235674")):
+            self.click(self.button(draft, "custom_color"))
+        swatches = [w for w in descendants(draft) if isinstance(w, tk.Radiobutton)]
+        chosen = [w for w in swatches if w["text"] == "✓"]
+        self.assertEqual([str(w["value"]) for w in chosen], ["#235674"])
+        for swatch in swatches:
+            self.assertLessEqual(swatch.winfo_x() + swatch.winfo_width(), swatch.master.winfo_width())
+        self.assertTrue(draft.bind("<Control-s>"))
+        self.assertTrue(self.button(draft, "save").winfo_ismapped())
+        scrolling = next(w for w in descendants(draft) if isinstance(w, self.mod.Rolavel))
+        final_checkbox = next(w for w in descendants(draft) if isinstance(w, tk.Checkbutton)
+                              and w["text"] == self.ui.t("share_on"))
+        self.assertLess(scrolling.tela.yview()[1], 1)
+        final_checkbox.event_generate("<FocusIn>")
+        self.ui.update_idletasks()
+        self.assertGreater(scrolling.tela.yview()[0], 0)
+        self.assertLessEqual(final_checkbox.winfo_rooty() + final_checkbox.winfo_height(),
+                             scrolling.tela.winfo_rooty() + scrolling.tela.winfo_height())
+        self.click(self.button(draft, "cancelar"))
+        self.assertFalse(self.ui.perfis())
+
     def test_failed_commit_restores_previous_sharing_options_name_and_selection(self):
         profile = self.create("Studio")
         selected = self.create("Privat")
@@ -228,8 +276,11 @@ class EditorTests(unittest.TestCase):
         first = self.create("Privat")
         second = self.create("Arbeit")
         self.ui.mudar_tema("escuro")
+        self.ui.geometry(f"{self.ui.px(880)}x{self.ui.px(600)}+30000+30000")
         self.ui.update()
         self.assertTrue(self.ui.sidebar.winfo_ismapped())
+        self.ui.show_workspace_tab("details")
+        self.ui.update_idletasks()
         up = next(w for w in descendants(self.ui.area) if isinstance(w, self.mod.Botao) and w["text"] == "↑  " + self.ui.t("up"))
         self.click(up)
         self.assertEqual(self.ui.perfis(), [second, first])
@@ -237,13 +288,14 @@ class EditorTests(unittest.TestCase):
         self.ui.geometry("590x640+30000+30000")
         self.ui.update()
         self.assertTrue(self.ui.picker.winfo_ismapped())
-        down = next(w for w in descendants(self.ui.picker) if isinstance(w, self.mod.Botao) and w["text"] == "↓")
+        down = next(w for w in descendants(self.ui.area) if isinstance(w, self.mod.Botao) and w["text"] == "↓  " + self.ui.t("down"))
         self.click(down)
         with self.mod.db() as con:
             self.assertEqual(list(self.mod.prefs.all_settings(con)), [first[0], second[0]])
         self.assertEqual(self.ui.selected, second[0])
 
     def test_double_click_opens_newly_selected_row_once_after_redraw(self):
+        self.ui.geometry(f"{self.ui.px(880)}x{self.ui.px(600)}+30000+30000")
         first = self.create("Privat")
         second = self.create("Arbeit")
         self.ui.select_profile(second[0])

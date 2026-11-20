@@ -77,3 +77,26 @@ _SHELL = {
 }
 for _language, (_tray, _link, _contrast) in _SHELL.items():
     PROFILE_TEXT[_language].update(tray=_tray, save_link=_link, low_contrast=_contrast)
+
+_WORKSPACE = {
+    "de": ("Übersicht", "Profildaten", "Profil wechseln", "Profile durchsuchen", "Kein passendes Profil", "Noch kein Messwert", "Wartet auf die nächste Meldung von Claude Code.", "Limitanzeige ist ausgeschaltet.", "Mehr"),
+    "en": ("Overview", "Profile details", "Switch profile", "Search profiles", "No matching profiles", "No reading yet", "Waiting for the next reading from Claude Code.", "Limit readings are turned off.", "More"),
+    "pt": ("Visão geral", "Dados do perfil", "Trocar perfil", "Buscar perfis", "Nenhum perfil encontrado", "Sem leitura", "Aguardando a próxima leitura do Claude Code.", "A leitura de limites está desativada.", "Mais"),
+    "es": ("Resumen", "Datos del perfil", "Cambiar perfil", "Buscar perfiles", "Ningún perfil coincide", "Sin medición", "Esperando la próxima lectura de Claude Code.", "La lectura de límites está desactivada.", "Más"),
+    "fr": ("Aperçu", "Détails du profil", "Changer de profil", "Rechercher un profil", "Aucun profil trouvé", "Aucun relevé", "En attente du prochain relevé de Claude Code.", "Le suivi des limites est désactivé.", "Plus"),
+    "it": ("Panoramica", "Dati del profilo", "Cambia profilo", "Cerca profili", "Nessun profilo trovato", "Nessun dato", "In attesa della prossima lettura di Claude Code.", "La lettura dei limiti è disattivata.", "Altro"),
+    "ru": ("Обзор", "Данные профиля", "Сменить профиль", "Поиск профилей", "Профиль не найден", "Пока нет данных", "Ожидаются данные от Claude Code.", "Отображение лимитов отключено.", "Ещё"),
+    "ja": ("概要", "プロファイル情報", "プロファイルを切り替え", "プロファイルを検索", "該当するプロファイルがありません", "データなし", "Claude Code からの次の値を待っています。", "使用上限の表示は無効です。", "その他"),
+    "zh": ("概览", "配置文件信息", "切换配置文件", "搜索配置文件", "找不到匹配的配置文件", "暂无读数", "正在等待 Claude Code 的下一次读数。", "用量限额显示已关闭。", "更多"),
+    "ko": ("개요", "프로필 정보", "프로필 전환", "프로필 검색", "일치하는 프로필 없음", "측정값 없음", "Claude Code의 다음 측정값을 기다리는 중입니다.", "한도 표시가 꺼져 있습니다.", "더 보기"),
+}
+for _language, _labels in _WORKSPACE.items():
+    PROFILE_TEXT[_language].update(zip(("overview", "details", "switch_profile", "search_profiles", "no_match",
+                                        "no_reading", "wait_reading", "capture_disabled", "more"), _labels, strict=True))
+
+for _language, _label in {
+    "de": "Tariflimits · verbraucht", "en": "Plan limits used", "pt": "Uso dos limites do plano",
+    "es": "Límites del plan consumidos", "fr": "Limites du forfait utilisées", "it": "Limiti del piano utilizzati",
+    "ru": "Использовано от лимита", "ja": "プラン上限の使用率", "zh": "套餐限额使用率", "ko": "요금제 한도 사용률",
+}.items():
+    PROFILE_TEXT[_language]["quota_used"] = _label

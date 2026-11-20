@@ -87,11 +87,32 @@ class DesktopLayoutTests(unittest.TestCase):
     def test_pending_login_fits_default_at_200_percent(self):
         with patch.object(self.module.App, "area_trabalho", return_value=(0, 0, 2560, 1440)):
             self.launch()
-        self.assertGreaterEqual(self.ui.winfo_width(), self.ui.px(720))
-        self.assertTrue(self.ui.sidebar.winfo_ismapped())
+        self.assertAlmostEqual(self.ui.winfo_width(), self.ui.px(480), delta=2)
+        self.assertAlmostEqual(self.ui.winfo_height(), self.ui.px(360), delta=2)
+        self.assertTrue(self.ui.picker.winfo_ismapped())
         for text in ("Multi Claude", "Abnahmeprofil", self.ui.t("aguard"), self.ui.t("colar"),
                      self.ui.t("cancelar"), self.module.ATRIBUICAO):
             self.assert_label_fits(text)
+
+    def test_status_and_usage_refresh_retain_the_selected_action_and_tab(self):
+        self.launch()
+        self.ui.show_workspace_tab("code")
+        open_terminal = next(w for w in self.descendants(self.ui) if isinstance(w, self.module.Botao)
+                             and w["text"] == self.ui.t("terminal"))
+        self.ui.estado[self.profile[2]] = (True, False)
+        self.ui.recarregar()
+        self.ui.update()
+        self.assertTrue(open_terminal.winfo_exists())
+        self.assertTrue(open_terminal.winfo_ismapped())
+        self.assertEqual(self.ui.workspace_tab, "code")
+
+    def test_manual_refresh_keeps_last_good_reading_while_loading(self):
+        self.launch()
+        key = self.ui.options[self.profile[0]].key
+        sample = self.module.profile_usage.TokenUsage(output_tokens=18, available=True)
+        self.ui.usage_cache[key] = (10, sample, True)
+        self.ui.refresh_usage(self.profile)
+        self.assertIs(self.ui.usage_cache[key][1], sample)
 
     def test_small_legacy_size_switches_to_compact_and_keeps_controls(self):
         self.launch("640x680+50+50")
@@ -101,6 +122,24 @@ class DesktopLayoutTests(unittest.TestCase):
         for text in ("Multi Claude", "Abnahmeprofil", self.ui.t("aguard"), self.ui.t("entrar"),
                      self.ui.t("fechar"), self.ui.t("colar"), self.module.ATRIBUICAO):
             self.assert_label_fits(text)
+
+    def test_upgrade_stores_clamped_geometry_and_keeps_future_custom_size(self):
+        with patch.object(self.module.App, "area_trabalho", return_value=(0, 0, 800, 660)):
+            self.launch("4000x3000+30000+30000")
+        self.assertEqual(self.module.cfg_get("compact_workspace"), "1")
+        self.assertEqual(self.module.cfg_get("geometria"),
+                         f"{800 - self.ui.moldura[0]}x{660 - self.ui.moldura[1]}+0+0")
+        with patch.object(self.ui, "area_trabalho", return_value=(0, 0, 2560, 1440)):
+            self.assertEqual(self.ui.restaurar_geometria("1400x900+42+57"), "1400x900+42+57")
+
+    def test_long_action_feedback_does_not_move_the_workspace(self):
+        self.launch()
+        self.ui.login_perfil = None
+        before = (self.ui.corpo.winfo_height(), self.ui.detail.winfo_rooty())
+        self.ui.feedback("A" * 300)
+        self.ui.update_idletasks()
+        self.assertEqual((self.ui.corpo.winfo_height(), self.ui.detail.winfo_rooty()), before)
+        self.assert_label_fits(self.module.ATRIBUICAO)
 
     def test_profile_status_and_actions_fit_small_work_area(self):
         with patch.object(self.module.App, "area_trabalho", return_value=(0, 0, 800, 660)):

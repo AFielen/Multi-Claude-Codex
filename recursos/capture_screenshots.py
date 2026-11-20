@@ -35,7 +35,7 @@ def capture(widget, path):
     widget.update()
     hwnd = ctypes.windll.user32.GetParent(widget.winfo_id())
     ImageGrab.grab(window=hwnd).save(path)
-    print(path.relative_to(ROOT), flush=True)
+    print(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path, flush=True)
 
 
 def main():

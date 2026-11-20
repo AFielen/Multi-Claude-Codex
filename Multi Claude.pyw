@@ -24,7 +24,6 @@ Login: o usuário pode colar o link do navegador no diálogo do perfil escolhido
 import contextlib
 import ctypes
 import ctypes.wintypes as wt
-import hashlib
 import json
 import os
 import queue
@@ -47,6 +46,7 @@ import profile_code
 import profile_settings as prefs
 import profile_usage
 import windows_profiles
+from workspace_usage import UsagePanel
 from profile_text import PROFILE_TEXT
 
 try:
@@ -55,7 +55,7 @@ except ImportError:  # sem Pillow: avatares só com a inicial
     Image = None
 
 APP = "Multi Claude"
-VERSAO = "2.2.0"
+VERSAO = "2.3.0"
 AUTOR = "Richard KPL"
 GITHUB = "https://github.com/RichardKPL"
 REPO = "https://github.com/RichardKPL/multi-claude"
@@ -88,6 +88,14 @@ TEMAS = {
                   CHIP="#f1eee7", MENU="#ffffff"),
 }
 FIXAS = dict(ACCENT="#d97757", ACCENT_HOVER="#e4876a", VERDE="#5fa85e", AMARELO="#d39b33", VERMELHO="#d9534f")
+WORKSPACE_COLORS = {
+    "claro": dict(BG="#F5F4F1", PAINEL="#F0EFEB", CARD="#FFFFFF", SUB="#645F59",
+                  BORDA="#D8D5CE", ACTIVE="#EAE1D9", ACCENT="#9A4933", ACCENT_HOVER="#843D29",
+                  VERDE="#326C4C", AMARELO="#8F590A", VERMELHO="#A53936"),
+    "escuro": dict(BG="#202121", PAINEL="#252626", CARD="#2B2D2C", SUB="#B5B6B0",
+                   BORDA="#434543", ACTIVE="#493A33", ACCENT="#A75239", ACCENT_HOVER="#B15C43",
+                   VERDE="#86C9A2", AMARELO="#E7BC71", VERMELHO="#F3958E"),
+}
 AVATARES = ["#d97757", "#6a9bd8", "#5fa85e", "#b77fd0", "#d39b33", "#4fb0a8", "#d86a8f"]
 C = {}  # paleta ativa
 
@@ -115,6 +123,7 @@ def aplicar_tema(escolha):
     efetivo = tema_sistema() if escolha == "sistema" else escolha
     C.clear()
     C.update(TEMAS[efetivo], **FIXAS)
+    C.update(WORKSPACE_COLORS[efetivo])
     C["nome"] = efetivo
     return efetivo
 
@@ -941,7 +950,7 @@ def desenhar_avatar(canvas, nome, foto, tam, fundo, indice, cor=None):
         rgb = [int(cor[n:n+2], 16) for n in (1, 3, 5)]
         ink = "#171717" if sum(a*b for a,b in zip(rgb, (.299,.587,.114))) > 151 else "#ffffff"
         canvas.create_text(tam // 2, tam // 2, text=(nome.strip()[:1] or "?").upper(), fill=ink,
-                           font=(FONTE, int(tam * 0.36), "bold"))
+                           font=(FONTE, -max(10, round(tam * 0.46)), "bold"))
 
 
 # ---------- Claude ----------
@@ -1217,6 +1226,10 @@ class Botao(tk.Label):
                  "normal": (C["BTN"], C["BTN_HOVER"], C["TEXTO"]),
                  "fantasma": (master["bg"], C["BTN"], C["TEXTO"])}[tipo]
         self.cor, self.hover = cores[0], cores[1]
+        kw.setdefault("bd", 0)
+        kw.setdefault("highlightthickness", 1)
+        kw.setdefault("highlightbackground", self.cor)
+        kw.setdefault("highlightcolor", C["TEXTO"])
         kw.setdefault("padx", 14)
         kw.setdefault("pady", 7)
         super().__init__(master, text=texto, bg=self.cor, fg=cores[2], font=(FONTE, tamanho, "bold"),
@@ -1224,8 +1237,6 @@ class Botao(tk.Label):
         self.bind("<Button-1>", lambda e: cmd())
         self.bind("<Return>", lambda e: cmd())
         self.bind("<space>", lambda e: cmd())
-        self.bind("<FocusIn>", lambda e: self.config(relief="solid", bd=1))
-        self.bind("<FocusOut>", lambda e: self.config(relief="flat", bd=1))
         self.bind("<Enter>", lambda e: self.config(bg=self.hover))
         self.bind("<Leave>", lambda e: self.config(bg=self.cor))
 
@@ -1344,6 +1355,17 @@ class App(tk.Tk):
         self.estado = {}  # pasta -> (logado, aberto)
         self.layout = None  # (colunas, compacto) do último desenho
         self.selected = None
+        self.workspace_tab = "overview"
+        self.view_signature = None
+        self.profile_signature = None
+        self.view_profile = None
+        self.usage_view = None
+        self.summary_view = None
+        self.refresh_key = None
+        self.feedback_timer = None
+        self.status_results = queue.SimpleQueue()
+        self.status_work = False
+        self.status_epoch = 0
         self.options = {}
         self.shortcuts = {}
         self.shortcut_errors = {}
@@ -1375,7 +1397,13 @@ class App(tk.Tk):
         quadro = wt.RECT()
         ctypes.windll.user32.AdjustWindowRectEx(ctypes.byref(quadro), 0x00CF0000, False, 0)  # WS_OVERLAPPEDWINDOW
         self.moldura = (quadro.right - quadro.left, quadro.bottom - quadro.top)
-        self.restaurar_geometria(cfg_get("geometria"))
+        saved = cfg_get("geometria")
+        compact_upgrade = cfg_get("compact_workspace") is None
+        geometry = self.restaurar_geometria(saved, compact_upgrade=compact_upgrade)
+        if compact_upgrade:
+            with db() as con:
+                con.executemany("INSERT OR REPLACE INTO config VALUES (?, ?)",
+                                [("geometria", geometry), ("compact_workspace", "1")])
 
         # Sobrou modo login de uma execução anterior? Limpa.
         for c in ("login_pasta", "login_ok", "login_url"):
@@ -1383,8 +1411,9 @@ class App(tk.Tk):
         preparar_fotos()
 
         self.montar()
+        self.bind("<Control-k>", lambda e: self.quick_switch())
         self.protocol("WM_DELETE_WINDOW", self.fechar)
-        self.after(200, self.atualizar_estado)
+        self.status_after = self.after(200, self.atualizar_estado)
         if self.primeira:
             self.after(300, self.boas_vindas)
 
@@ -1420,10 +1449,12 @@ class App(tk.Tk):
         x = max(left, min(x, left + max_w - w))
         y = max(top, min(y, top + max_h - h))
         janela.minsize(min_w, min_h)
-        janela.geometry(f"{w}x{h}+{x}+{y}")
+        geometry = f"{w}x{h}+{x}+{y}"
+        janela.geometry(geometry)
+        return geometry
 
-    def restaurar_geometria(self, valor):
-        w, h = self.px(940), self.px(720)
+    def restaurar_geometria(self, valor, *, compact_upgrade=False):
+        w, h = self.px(480), self.px(360)
         x, y = self.px(40), self.px(40)
         m = re.fullmatch(r"(\d{1,6})x(\d{1,6})(?:([+-]-?\d{1,7})([+-]-?\d{1,7}))?", valor or "")
         if m:
@@ -1434,7 +1465,9 @@ class App(tk.Tk):
                 # Tk saves absolute negative positions as "+-N"; "-N" is an offset from the far edge.
                 x = int(m[3][1:]) if m[3][0] == "+" else self.winfo_screenwidth() - w + int(m[3]) - self.moldura[0]
                 y = int(m[4][1:]) if m[4][0] == "+" else self.winfo_screenheight() - h + int(m[4]) - self.moldura[1]
-        self.ajustar_janela(self, w, h, x, y, self.px(400), self.px(400))
+        if compact_upgrade:
+            w, h = min(w, self.px(480)), min(h, self.px(360))
+        return self.ajustar_janela(self, w, h, x, y, self.px(350), self.px(280))
 
     # ----- montagem -----
     def montar(self):
@@ -1444,38 +1477,23 @@ class App(tk.Tk):
         barra_titulo(self)
         self.layout = None
 
+        self.view_signature = self.profile_signature = None
+        self.view_profile = self.usage_view = None
         topo = tk.Frame(self, bg=C["BG"])
-        topo.pack(fill="x", padx=22, pady=(18, 0))
-        logo = tk.Canvas(topo, width=40, height=40, bg=C["BG"], highlightthickness=0)
-        logo.pack(side="left", padx=(0, 12))
-        img = None
-        for arq in (ICONE_PNG, ICONE):
-            if Image and os.path.exists(arq):
-                try:
-                    img = ImageTk.PhotoImage(Image.open(arq).convert("RGBA").resize((40, 40), Image.LANCZOS))
-                    break
-                except Exception:
-                    img = None
-        if img:
-            logo.create_image(20, 20, image=img)
-            logo.imagem = img
+        topo.pack(fill="x", padx=12, pady=(7, 3))
+        size = self.px(23)
+        logo = tk.Canvas(topo, width=size, height=size, bg=C["BG"], highlightthickness=0)
+        logo.pack(side="left", padx=(0, 7))
+        if Image and os.path.isfile(ICONE_PNG):
+            with Image.open(ICONE_PNG) as source:
+                logo.imagem = ImageTk.PhotoImage(source.convert("RGBA").resize((size, size), Image.LANCZOS))
+            logo.create_image(size // 2, size // 2, image=logo.imagem)
         else:
-            logo.create_text(20, 20, text="✳", fill=C["ACCENT"], font=(FONTE, 22, "bold"))
-        # Os botões entram primeiro no pack para nunca serem cortados quando a janela estreita.
-        acoes = tk.Frame(topo, bg=C["BG"])
-        acoes.pack(side="right")
-        Botao(acoes, "⚙", self.configuracoes, tipo="fantasma", tamanho=13, padx=9, pady=2).pack(side="left", padx=(0, 6))
-        self.btn_novo = Botao(acoes, "+  " + self.t("novo"), self.novo, tipo="primario")
-        self.btn_novo.pack(side="left")
-        textos = tk.Frame(topo, bg=C["BG"])
-        textos.pack(side="left", fill="x", expand=True)
-        tk.Label(textos, text=APP, bg=C["BG"], fg=C["TEXTO"], font=(FONTE, 18, "bold"), anchor="w").pack(fill="x")
-        self.lbl_sub = tk.Label(textos, text=self.t("sub"), bg=C["BG"], fg=C["SUB"], font=(FONTE, 9),
-                                anchor="w", justify="left")
-        self.lbl_sub.pack(fill="x")
-        textos.bind("<Configure>", lambda e: self.lbl_sub.config(wraplength=max(120, e.width)))
-        topo.bind("<Configure>", lambda e: self.btn_novo.config(
-            text="+" if e.width < self.px(520) else "+  " + self.t("novo")))
+            logo.create_text(size // 2, size // 2, text="✳", fill=C["ACCENT"], font=(FONTE, 14))
+        self.heading(topo, APP, 13).pack(side="left")
+        Botao(topo, "⚙", self.configuracoes, tipo="fantasma", tamanho=12, padx=5, pady=1).pack(side="right")
+        self.btn_novo = Botao(topo, "+ " + self.t("novo"), self.novo, tamanho=9, padx=8, pady=2)
+        self.btn_novo.pack(side="right", padx=(2, 4))
 
         if not self.claude:
             tk.Label(self, text="⚠  " + self.t("ausente"), bg=C["BG"], fg=C["VERMELHO"],
@@ -1494,23 +1512,26 @@ class App(tk.Tk):
 
         # Rodapé com copyright
         rodape = tk.Frame(self, bg=C["BG"])
-        rodape.pack(side="bottom", fill="x", padx=22, pady=(0, 10))
-        versao = tk.Label(rodape, text=f"{APP} v{VERSAO} · Modified edition", bg=C["BG"], fg=C["SUB"],
-                          font=(FONTE, 8))
-        versao.pack(side="left")
-        link = tk.Label(rodape, text=ATRIBUICAO, bg=C["BG"], fg=C["ACCENT"], font=(FONTE, 8, "underline"),
+        rodape.pack(side="bottom", fill="x", padx=10, pady=(0, 2))
+        self.footer_text = tk.StringVar(self, f"v{VERSAO} · Modified edition")
+        versao = tk.Label(rodape, textvariable=self.footer_text, bg=C["BG"], fg=C["SUB"],
+                          font=(FONTE, 8), anchor="w")
+        version_width = versao.winfo_reqwidth()
+        versao.configure(width=1)
+        link = tk.Label(rodape, text=ATRIBUICAO, bg=C["BG"], fg=C["SUB"], font=(FONTE, 8, "underline"),
                         cursor="hand2")
         link.pack(side="right")
+        versao.pack(side="left", fill="x", expand=True)
         link.bind("<Button-1>", lambda e: webbrowser.open(GITHUB))
         def dispor_rodape(evento):
-            lado = "left" if evento.width >= versao.winfo_reqwidth() + link.winfo_reqwidth() + 8 else "top"
+            lado = "left" if evento.width >= version_width + link.winfo_reqwidth() + 8 else "top"
             if versao.winfo_manager() == "pack" and versao.pack_info().get("side") != lado:
                 versao.pack_configure(side=lado)
                 link.pack_configure(side="right" if lado == "left" else "top")
         rodape.bind("<Configure>", dispor_rodape)
 
         self.corpo = tk.Frame(self, bg=C["BG"])
-        self.corpo.pack(fill="both", expand=True, padx=12, pady=12)
+        self.corpo.pack(fill="both", expand=True, padx=8, pady=(3, 4))
         self.corpo.columnconfigure(1, weight=1)
         self.corpo.rowconfigure(1, weight=1)
         self.sidebar = Rolavel(self.corpo, C["PAINEL"])
@@ -1852,13 +1873,12 @@ class App(tk.Tk):
                                  "ORDER BY position, id").fetchall()
         return [(i, n, caminho_real(p), f) for i, n, p, f in linhas]
 
-    def calcular_estado(self):
-        perfis = self.perfis()
+    @staticmethod
+    def calcular_estado(perfis):
         if not perfis:
-            return {}
+            return {}, {}
         abertos = claudes_abertos()
-        self.apply_borders(perfis, abertos)
-        return {p[2]: (esta_logado(p[2]), normalizar(p[2]) in abertos) for p in perfis}
+        return {p[2]: (esta_logado(p[2]), normalizar(p[2]) in abertos) for p in perfis}, abertos
 
     def apply_borders(self, profiles, running):
         desired = {}
@@ -1874,19 +1894,47 @@ class App(tk.Tk):
         self.colored = desired
 
     def atualizar_estado(self):
+        self.status_after = None
+        delay = 2000
         try:
-            if self.tema == "sistema" and tema_sistema() != self.tema_efetivo:
+            if self.tema == "sistema" and self.grab_current() is None and tema_sistema() != self.tema_efetivo:
                 self.mudar_tema("sistema")
-            novo = self.calcular_estado()
-            if novo != self.estado:
-                self.estado = novo
-                if self.login_perfil and novo.get(self.login_perfil[2], (False, False))[0]:
-                    self.cancelar_login()
+            if self.status_work:
+                try:
+                    epoch, state, running = self.status_results.get_nowait()
+                except queue.Empty:
+                    delay = 120
                 else:
-                    self.recarregar()
+                    self.status_work = False
+                    if epoch != self.status_epoch:
+                        delay = 1
+                    elif state is not None:
+                        self.apply_borders(self.view_profiles, running)
+                        self.accept_status(state)
+            elif self.view_profiles:
+                self.status_work = True
+                profiles, epoch = tuple(self.view_profiles), self.status_epoch
+                def read():
+                    try:
+                        state, running = App.calcular_estado(profiles)
+                    except Exception as exc:
+                        log(f"Profile status: {type(exc).__name__}")
+                        state, running = None, {}
+                    self.status_results.put((epoch, state, running))
+                threading.Thread(target=read, daemon=True).start()
+                delay = 120
         except Exception as e:
             log(f"erro ao atualizar estado: {e}")
-        self.after(2000, self.atualizar_estado)
+        self.status_after = self.after(delay, self.atualizar_estado)
+
+    def accept_status(self, state):
+        if state == self.estado:
+            return
+        self.estado = state
+        if self.login_perfil and state.get(self.login_perfil[2], (False, False))[0]:
+            self.cancelar_login()
+        else:
+            self.update_live()
 
     def check_shortcuts(self):
         try:
@@ -1907,46 +1955,129 @@ class App(tk.Tk):
             saved = cfg_get("selected_code_key")
             self.selected = next((i for i, opt in self.options.items() if opt.key == saved),
                                  profiles[0][0] if profiles else None)
+        self.view_profiles = profiles
         if self.layout is None:
             self.layout = self._layout_para(self.corpo.winfo_width())
-        for parent in (self.sidebar.dentro, self.picker, self.area):
+        appearance = tuple((p, self.options[p[0]].color, self.options[p[0]].shortcut) for p in profiles)
+        direct = profiles[:2]
+        if self.layout[0] == 1 and len(profiles) > 2 and self.selected not in {p[0] for p in direct}:
+            direct = [profiles[0], next(p for p in profiles if p[0] == self.selected)]
+        signature = self.layout, appearance, tuple(p[0] for p in direct)
+        if signature != self.view_signature:
+            self.view_signature = signature
+            self.profile_signature = None
+            self.build_profile_list(profiles, direct)
+        current = next((p for p in profiles if p[0] == self.selected), None)
+        if not current:
+            if self.profile_signature != ():
+                for widget in self.area.winfo_children():
+                    widget.destroy()
+                self.profile_signature = ()
+                self.view_profile = self.usage_view = None
+                self.heading(self.area, self.t("nenhum"), 15).pack(pady=(24, 3))
+                self.note(self.area, self.t("nenhum_sub")).pack()
+                self.action_group(self.area, [(self.t("novo"), self.novo, "primario"),
+                                              (self.t("importar"), self.importar, "normal")])
+            return
+        self.selected_path = current[2]
+        opt = self.options[current[0]]
+        detail = (current, opt.key, opt.color, opt.isolated, opt.sharing, self.layout)
+        if detail != self.profile_signature:
+            self.profile_signature = detail
+            self.view_profile = current
+            for widget in self.area.winfo_children():
+                widget.destroy()
+            self.draw_detail(current)
+        self.update_live()
+        if self.scan_after is None:
+            self.scan_after = self.after(80, self.poll_usage)
+
+    def build_profile_list(self, profiles, direct):
+        self.sidebar_rows = {}
+        self.compact_buttons = {}
+        self.sidebar_states = {}
+        for parent in (self.sidebar.dentro, self.picker):
             for child in parent.winfo_children():
                 child.destroy()
         self.sidebar.grid_remove()
         self.picker.grid_remove()
         self.detail.grid(row=1, column=1, sticky="nsew")
+        self.corpo.columnconfigure(0, minsize=0)
         if not profiles:
-            self.corpo.columnconfigure(0, minsize=0)
-            self.heading(self.area, self.t("nenhum")).pack(pady=(40, 8))
-            self.note(self.area, self.t("nenhum_sub")).pack()
-            Botao(self.area, self.t("novo"), self.novo, tipo="primario").pack(pady=10)
-            Botao(self.area, self.t("importar"), self.importar).pack()
             return
-        current = next(p for p in profiles if p[0] == self.selected)
-        self.selected_path = current[2]
         if self.layout[0] == 2:
-            width = self.px(204)
-            self.corpo.columnconfigure(0, minsize=width)
+            width = self.px(186)
             self.sidebar.tela.config(width=width)
-            self.sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 10))
-            self.heading(self.sidebar.dentro, self.t("profiles"), 11).pack(fill="x", padx=12, pady=12)
-            self.sidebar_rows = {}
+            self.sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 6))
+            header = tk.Frame(self.sidebar.dentro, bg=C["PAINEL"])
+            header.pack(fill="x", padx=8, pady=(8, 4))
+            self.heading(header, self.t("profiles"), 11).pack(side="left")
+            Botao(header, "Ctrl+K", self.quick_switch, tipo="fantasma", tamanho=9, padx=4, pady=1).pack(side="right")
             for p in profiles:
                 self.sidebar_row(p)
         else:
-            self.corpo.columnconfigure(0, minsize=0)
-            self.picker.grid(row=0, column=1, sticky="ew", pady=(0, 4))
-            choose = tk.Menubutton(self.picker, text=self.t("profiles") + "   ▾", takefocus=True,
-                                   bg=C["PAINEL"], fg=C["TEXTO"], font=(FONTE, 10, "bold"), padx=10, pady=4)
-            menu = tk.Menu(choose, tearoff=0)
-            for p in profiles:
-                menu.add_command(label=p[1], command=lambda i=p[0]: self.select_profile(i))
-            choose.config(menu=menu)
-            choose.pack(side="left")
-            self.reorder_buttons(self.picker, current, compact=True)
-        self.draw_detail(current)
-        if self.scan_after is None:
-            self.scan_after = self.after(80, self.poll_usage)
+            self.picker.grid(row=0, column=1, sticky="ew", pady=(0, 3))
+            # Two direct targets fit at the minimum width. Search offers every registered profile.
+            for index, p in enumerate(direct):
+                self.picker.columnconfigure(index, weight=1, uniform="profiles")
+                cell = tk.Frame(self.picker, bg=C["PAINEL"])
+                cell.grid(row=0, column=index, sticky="ew", padx=1)
+                dot = tk.Label(cell, text="●", bg=cell["bg"], fg=self.options[p[0]].color, font=(FONTE, 8),
+                               cursor="hand2", padx=2)
+                dot.pack(side="left")
+                dot.bind("<Button-1>", lambda e, i=p[0]: self.select_profile(i))
+                chip = Botao(cell, p[1], lambda i=p[0]: self.select_profile(i), tipo="fantasma",
+                             tamanho=9, padx=4, pady=3, anchor="w", width=1)
+                chip.pack(side="left", fill="x", expand=True)
+                chip.dot = dot
+                self.compact_buttons[p[0]] = chip
+            Botao(self.picker, self.t("switch_profile") + " ▾", self.quick_switch, tipo="fantasma",
+                  tamanho=9, padx=5, pady=3).grid(row=0, column=2, sticky="e")
+
+    def quick_switch(self):
+        if self.grab_current() is None and self.view_profiles:
+            from profile_switcher import show_switcher
+            show_switcher(self, self.view_profiles, C)
+        return "break"
+
+    def update_live(self):
+        for p in self.view_profiles:
+            if p[0] in self.sidebar_rows:
+                self.update_sidebar_row(p)
+            chip = self.compact_buttons.get(p[0])
+            if chip:
+                selected = p[0] == self.selected
+                color = C["ACTIVE"] if selected else C["PAINEL"]
+                chip.cor = color
+                chip.config(bg=color, highlightbackground=color, fg=C["TEXTO"] if selected else C["SUB"])
+                chip.dot.config(bg=color)
+        if self.view_profile is None:
+            return
+        p = self.view_profile
+        signed, opened = self.estado.get(p[2], (False, False))
+        waiting = self.login_perfil and self.login_perfil[0] == p[0]
+        known = p[2] in self.estado
+        self.identity_status.configure(text=self.t("aberto" if opened else "fechado") if known else self.t("loading"),
+                                       fg=C["VERDE"] if opened else C["SUB"])
+        self.identity_separator.configure(text="·" if known or waiting else "")
+        login_state = self.t("aguard") if waiting else self.t("conectado" if signed else "desconectado") if known else ""
+        self.identity_login.configure(text=login_state)
+        self.open_action.configure(text=self.t("switch" if opened else "abrir"))
+        if known and not signed:
+            self.login_action.grid()
+        else:
+            self.login_action.grid_remove()
+        if opened:
+            self.close_action.grid()
+        else:
+            self.close_action.grid_remove()
+        if self.usage_view:
+            self.usage_view.update_reading()
+            self.usage_view.reload.config(state="disabled" if self.refresh_key == self.options[p[0]].key else "normal")
+        if self.summary_view:
+            self.summary_view.update_reading()
+        if self.workspace_tab == "details":
+            self.update_details(p)
 
     def sync_shortcuts(self):
         current = {i: opt.shortcut for i, opt in self.options.items()}
@@ -2008,27 +2139,25 @@ class App(tk.Tk):
         identifier, name, path, photo = p
         opt = self.options[identifier]
         selected = identifier == self.selected
-        bg = C["BTN"] if selected else C["PAINEL"]
-        row = tk.Frame(self.sidebar.dentro, bg=bg, cursor="hand2", takefocus=True)
+        bg = C["ACTIVE"] if selected else C["PAINEL"]
+        row = tk.Frame(self.sidebar.dentro, bg=bg, cursor="hand2", takefocus=True,
+                       highlightthickness=1, highlightbackground=bg, highlightcolor=C["TEXTO"])
         row.pack(fill="x", padx=4, pady=1)
         self.sidebar_rows[identifier] = row
         row.columnconfigure(2, weight=1)
-        tk.Frame(row, bg=opt.color if selected else bg, width=3).grid(row=0, column=0, rowspan=2, sticky="ns")
+        stripe = tk.Frame(row, bg=opt.color if selected else bg, width=3)
+        stripe.grid(row=0, column=0, rowspan=2, sticky="ns")
         size = self.px(32)
         avatar_view = tk.Canvas(row, bg=bg, width=size, height=size, highlightthickness=0)
         desenhar_avatar(avatar_view, name, photo, size, bg, 0, opt.color)
         avatar_view.grid(row=0, column=1, rowspan=2, padx=8, pady=8)
         name_label = tk.Label(row, text=name, bg=bg, fg=C["TEXTO"], anchor="w", width=1, font=(FONTE, 10, "bold"))
         name_label.grid(row=0, column=2, sticky="sew")
-        active = self.estado.get(path, (False, False))[1]
-        caption = self.t("aberto" if active else "fechado")
-        hotkey = opt.shortcut if identifier not in self.shortcut_errors else ""
-        summary = self.limits.get(opt.key, {}) if opt.isolated else {}
-        warning = max((value["used_percentage"] for _, value in self.live_windows(summary)), default=0)
-        caption += f"  ·  {warning:g}%" if warning > 80 else ("  ·  " + hotkey if hotkey else "")
-        status = tk.Label(row, text=caption, bg=bg, fg=C["AMARELO"] if warning > 80 else
-                          C["VERDE"] if active else C["SUB"], font=(FONTE, 8), anchor="w", width=1)
+        row.run_dot = tk.Label(row, text="○", bg=bg, fg=C["SUB"], font=(FONTE, 8))
+        row.run_dot.grid(row=0, column=3, sticky="se", padx=(1, 6))
+        status = tk.Label(row, bg=bg, font=(FONTE, 8), anchor="w", width=1)
         status.grid(row=1, column=2, sticky="new")
+        self.sidebar_states[identifier] = (stripe, avatar_view, name_label, status)
         def drop(event):
             target = next((i for i, r in self.sidebar_rows.items()
                            if r.winfo_rooty() <= event.y_root < r.winfo_rooty() + r.winfo_height()
@@ -2051,6 +2180,45 @@ class App(tk.Tk):
         row.bind("<space>", lambda e: self.select_profile(identifier))
         for key, delta in (("Up", -1), ("Down", 1)):
             row.bind("<Alt-" + key + ">", lambda e, d=delta: self.move_by(identifier, d))
+            row.bind("<" + key + ">", lambda e, d=delta: self.step_profile(identifier, d))
+
+    def step_profile(self, identifier, delta):
+        order = list(self.sidebar_rows)
+        i = order.index(identifier) + delta
+        if 0 <= i < len(order):
+            self.select_profile(order[i])
+            self.sidebar_rows[order[i]].focus_set()
+        return "break"
+
+    def update_sidebar_row(self, p):
+        identifier, name, path, photo = p
+        opt = self.options[identifier]
+        selected = identifier == self.selected
+        bg = C["ACTIVE"] if selected else C["PAINEL"]
+        row = self.sidebar_rows[identifier]
+        stripe, avatar, label, status = self.sidebar_states[identifier]
+        if row["bg"] != bg:
+            row.config(bg=bg, highlightbackground=bg)
+            for widget in (label, avatar, status):
+                widget.config(bg=bg)
+            stripe.config(bg=opt.color if selected else bg)
+            desenhar_avatar(avatar, name, photo, self.px(32), bg, 0, opt.color)
+        active = self.estado.get(path, (False, False))[1]
+        # The dot conveys running state alongside the name; the second line has room for a shortcut or quota.
+        caption = self.t("aberto" if active else "fechado")
+        limit = max(self.live_windows(self.limits.get(opt.key, {}) if opt.isolated else {}),
+                    key=lambda item: item[1]["used_percentage"], default=None)
+        if limit and limit[1]["used_percentage"] > 80:
+            caption = f"{limit[1]['used_percentage']:g} % · {self.t(limit[0])}"
+            ink = C["AMARELO"]
+        else:
+            if opt.shortcut and identifier not in self.shortcut_errors:
+                caption = opt.shortcut
+            ink = C["VERDE"] if active else C["SUB"]
+        if status["text"] != caption or status["fg"] != ink:
+            status.config(text=caption, fg=ink)
+        target_dot = C["VERDE"] if active else C["SUB"]
+        row.run_dot.configure(fg=target_dot, bg=bg, text="●" if active else "○")
 
     def move_by(self, identifier, delta):
         order = list(self.options)
@@ -2099,75 +2267,142 @@ class App(tk.Tk):
         return inside
 
     def draw_detail(self, p):
-        identifier, name, path, photo = p
-        opt = self.options[identifier]
-        logado, aberto = self.estado.get(path, (False, False))
-        top = self.section(self.area, None)
-        badge = tk.Frame(top, bg=top["bg"])
-        badge.pack(fill="x")
-        size = self.px(44)
-        av = tk.Canvas(badge, bg=badge["bg"], width=size, height=size, highlightthickness=0)
-        desenhar_avatar(av, name, photo, size, badge["bg"], 0, opt.color)
-        av.pack(side="left", padx=(0, 10))
-        identity = tk.Frame(badge, bg=badge["bg"])
-        identity.pack(side="left", expand=True, fill="x")
-        title = self.heading(identity, name, 16)
-        title.pack(fill="x")
-        title.bind("<Configure>", lambda e: title.config(wraplength=max(1, e.width - 4)))
-        state = tk.Frame(identity, bg=identity["bg"])
-        state.pack(fill="x")
-        waiting = self.login_perfil and self.login_perfil[0] == identifier
-        self.note(state, self.t("aguard" if waiting else "conectado" if logado else "desconectado")).pack(side="left")
-        self.note(state, self.t("aberto" if aberto else "fechado"), color=C["VERDE"] if aberto else C["SUB"]).pack(side="left", padx=7)
-        actions = [(self.t("switch" if aberto else "abrir"), lambda: self.abrir(p), "primario")]
-        if not logado:
-            actions.append((self.t("entrar"), lambda: self.login(p), "normal"))
-        if aberto:
-            actions.append((self.t("fechar"), lambda: self.fechar_perfil(p), "normal"))
-        actions.append((self.t("edit_profile"), lambda: self.edit_profile(p), "normal"))
-        self.action_group(top, actions)
+        opt = self.options[p[0]]
+        hero = tk.Frame(self.area, bg=C["CARD"])
+        hero.pack(fill="x")
+        hero.columnconfigure(1, weight=1)
+        size = self.px(36)
+        av = tk.Canvas(hero, bg=hero["bg"], width=size, height=size, highlightthickness=0)
+        desenhar_avatar(av, p[1], p[3], size, hero["bg"], 0, opt.color)
+        av.grid(row=0, column=0, rowspan=2, padx=(10, 7), pady=(7, 3))
+        title = self.heading(hero, p[1], 15)
+        title.config(width=1)
+        title.grid(row=0, column=1, sticky="sew", pady=(4, 0))
+        state = tk.Frame(hero, bg=hero["bg"])
+        state.grid(row=1, column=1, sticky="nw")
+        self.identity_status = tk.Label(state, bg=state["bg"], anchor="w", font=(FONTE, 9))
+        self.identity_status.pack(side="left")
+        self.identity_separator = tk.Label(state, bg=state["bg"], fg=C["SUB"])
+        self.identity_separator.pack(side="left", padx=3)
+        self.identity_login = tk.Label(state, bg=state["bg"], fg=C["SUB"], anchor="w", font=(FONTE, 9))
+        self.identity_login.pack(side="left")
+        self.open_action = Botao(hero, self.t("abrir"), lambda: self.abrir(p), tipo="primario", tamanho=10, padx=11, pady=4)
+        self.open_action.grid(row=0, column=2, rowspan=2, padx=(3, 9), pady=(5, 0))
+        commands = tk.Frame(hero, bg=hero["bg"])
+        commands.grid(row=2, column=0, columnspan=3, sticky="w", padx=7, pady=(0, 3))
+        self.login_action = Botao(commands, self.t("entrar"), lambda: self.login(p), tipo="fantasma", tamanho=9, padx=5, pady=2)
+        self.login_action.grid(row=0, column=0)
+        self.close_action = Botao(commands, self.t("fechar"), lambda: self.fechar_perfil(p), tipo="fantasma",
+                                 tamanho=9, padx=5, pady=2)
+        self.close_action.grid(row=0, column=1)
+        Botao(commands, self.t("edit_profile"), lambda: self.edit_profile(p), tipo="fantasma",
+              tamanho=9, padx=5, pady=2).grid(row=0, column=2)
+        tabs = tk.Frame(self.area, bg=C["CARD"])
+        tabs.pack(fill="x", pady=(2, 0))
+        self.tab_buttons = {}
+        for i, (key, label) in enumerate((("overview", "overview"), ("code", "code_settings"), ("details", "details"))):
+            tabs.columnconfigure(i, weight=1, uniform="tabs")
+            tab = tk.Label(tabs, text=self.t(label), bg=tabs["bg"], fg=C["SUB"], takefocus=True,
+                           cursor="hand2", font=(FONTE, 9, "bold"), pady=3, width=1, highlightthickness=1,
+                           highlightbackground=tabs["bg"], highlightcolor=C["TEXTO"])
+            tab.grid(row=0, column=i, sticky="ew")
+            tab.bind("<Button-1>", lambda e, k=key: self.show_workspace_tab(k))
+            tab.bind("<Return>", lambda e, k=key: self.show_workspace_tab(k))
+            tab.bind("<space>", lambda e, k=key: self.show_workspace_tab(k))
+            for event, step in (("<Left>", -1), ("<Right>", 1)):
+                tab.bind(event, lambda e, n=i, d=step: self.step_tab(n, d))
+            line = tk.Frame(tabs, height=max(2, self.px(2)), bg=C["BORDA"])
+            line.grid(row=1, column=i, sticky="ew")
+            self.tab_buttons[key] = (tab, line)
+        self.tab_body = tk.Frame(self.area, bg=C["BG"])
+        self.tab_body.pack(fill="x", pady=(3, 1))
+        self.show_workspace_tab(self.workspace_tab, force=True)
 
-        code = self.section(self.area, self.t("code_settings"))
-        self.note(code, self.t("isolated" if opt.isolated else "shared")).pack(fill="x")
-        if opt.isolated and opt.sharing:
-            self.note(code, self.t("shared_items") + " · " + self.t("share_items")).pack(fill="x")
-        code_actions = [(self.t("terminal"), lambda: self.code_action(p), "normal"),
-                        (self.t("copy_command"), lambda: self.code_action(p, copy=True), "fantasma")]
-        if opt.isolated:
-            code_actions.append((self.t("entrar"), lambda: self.code_action(p, login=True), "fantasma"))
-        self.action_group(code, code_actions)
+    def step_tab(self, index, step):
+        key = tuple(self.tab_buttons)[(index + step) % len(self.tab_buttons)]
+        self.show_workspace_tab(key)
+        self.tab_buttons[key][0].focus_set()
+        return "break"
 
-        self.usage_area = self.section(self.area, self.t("usage"))
-        self.draw_usage(p)
-        info = self.section(self.area, self.t("pasta"))
-        self.note(info, path).pack(fill="x")
-        stamp = lambda date: self.local_time(date) if date else "—"
-        with db() as con:
-            created = con.execute("SELECT strftime('%s', criado) FROM perfis WHERE id=?", (identifier,)).fetchone()
-        self.note(info, self.t("created") + "  " + stamp(created[0] if created else None)).pack(fill="x")
-        if opt.key in self.sizes:
-            amount, partial = self.sizes[opt.key]
-            if amount is not None:
-                unit = "GiB" if amount >= 1024**3 else "MiB"
-                value = amount / (1024**3 if unit == "GiB" else 1024**2)
-                self.note(info, self.t("folder_size") + f"  {'≥ ' if partial else ''}{value:.1f} {unit}").pack(fill="x")
-        self.note(info, self.t("last_open") + "  " + stamp(opt.last_open)).pack(fill="x")
-        shortcut = opt.shortcut or "—"
-        if identifier in self.shortcut_errors:
-            shortcut += " · " + self.t("hotkey_busy")
-        self.note(info, self.t("hotkey") + "  " + shortcut).pack(fill="x")
-        if identifier in self.tray_errors:
-            self.note(info, self.t("tray") + " · " + self.t("unavailable")).pack(fill="x")
+    def show_workspace_tab(self, key, *, force=False):
+        if key not in self.tab_buttons or (key == self.workspace_tab and not force):
+            return
+        self.workspace_tab = key
+        self.usage_view = None
+        self.summary_view = None
+        p = self.view_profile
+        for child in self.tab_body.winfo_children():
+            child.destroy()
+        for name, (tab, line) in self.tab_buttons.items():
+            tab.config(fg=C["TEXTO"] if name == key else C["SUB"])
+            line.config(bg=C["ACCENT"] if name == key else C["BORDA"])
+        if key == "code":
+            opt = self.options[p[0]]
+            code = self.section(self.tab_body, None)
+            self.note(code, self.t("isolated" if opt.isolated else "shared")).pack(fill="x")
+            if opt.isolated and opt.sharing:
+                self.note(code, self.t("shared_items") + " · " + self.t("share_items")).pack(fill="x")
+            actions = [(self.t("terminal"), lambda: self.code_action(p), "normal"),
+                       (self.t("copy_command"), lambda: self.code_action(p, copy=True), "fantasma")]
+            if opt.isolated:
+                actions.append((self.t("entrar"), lambda: self.code_action(p, login=True), "fantasma"))
+            self.action_group(code, actions)
+        if key in ("overview", "code"):
+            self.usage_view = UsagePanel(self.tab_body, self, p, key, C, Botao)
+            self.usage_view.pack(fill="x")
+            self.usage_view.update_reading()
+            if key == "overview" and self.layout[0] == 2 and self.options[p[0]].isolated:
+                self.summary_view = UsagePanel(self.tab_body, self, p, "summary", C, Botao)
+                self.summary_view.pack(fill="x", pady=(5, 0))
+                self.summary_view.update_reading()
+        else:
+            self.draw_profile_details(p)
+        if not force:
+            self.detail.tela.yview_moveto(0)
+
+    def draw_profile_details(self, p):
+        info = self.section(self.tab_body, self.t("pasta"))
+        self.note(info, p[2]).pack(fill="x")
         self.action_group(info, [(self.t("explorer"), lambda: self.pasta(p), "normal"),
                                  (self.t("save_link"), lambda: self.save_windows_shortcut(p), "fantasma")])
-        if self.layout[0] == 2:
-            order = tk.Frame(info, bg=info["bg"])
-            order.pack(fill="x")
-            self.reorder_buttons(order, p)
-        more = [(self.t("excluir"), lambda: self.excluir(p), "fantasma")]
-        if logado:
-            more.insert(0, (self.t("sair"), lambda: self.sair(p), "fantasma"))
-        self.action_group(info, more)
+        with db() as con:
+            row = con.execute("SELECT strftime('%s', criado) FROM perfis WHERE id=?", (p[0],)).fetchone()
+        created = self.local_time(row[0]) if row and row[0] else "—"
+        self.note(info, self.t("created") + "   " + created).pack(fill="x")
+        self.details_stamp = self.note(info, "")
+        self.details_stamp.pack(fill="x")
+        self.details_size = self.note(info, "")
+        self.details_size.pack(fill="x")
+        shortcut = self.options[p[0]].shortcut or "—"
+        if p[0] in self.shortcut_errors:
+            shortcut += " · " + self.t("hotkey_busy")
+        self.note(info, self.t("hotkey") + "   " + shortcut).pack(fill="x")
+        if p[0] in self.tray_errors:
+            self.note(info, self.t("tray") + " · " + self.t("unavailable")).pack(fill="x")
+        order = tk.Frame(info, bg=info["bg"])
+        order.pack(fill="x", pady=2)
+        self.reorder_buttons(order, p)
+        management = tk.Frame(info, bg=info["bg"])
+        management.pack(fill="x", pady=3)
+        self.signout_action = Botao(management, self.t("sair"), lambda: self.sair(p), tipo="fantasma", tamanho=9, padx=5)
+        self.signout_action.grid(row=0, column=0)
+        Botao(management, self.t("excluir"), lambda: self.excluir(p), tipo="fantasma", tamanho=9, padx=5).grid(row=0, column=1)
+        self.update_details(p)
+
+    def update_details(self, p):
+        opt = self.options[p[0]]
+        if self.estado.get(p[2], (False, False))[0]:
+            self.signout_action.grid()
+        else:
+            self.signout_action.grid_remove()
+        self.details_stamp.config(text=self.t("last_open") + "   " + (self.local_time(opt.last_open) if opt.last_open else "—"))
+        size, partial = self.sizes.get(opt.key, (None, False))
+        if size is None:
+            value = "—"
+        else:
+            unit, divisor = ("GiB", 1024**3) if size >= 1024**3 else ("MiB", 1024**2)
+            value = f"{'≥ ' if partial else ''}{size/divisor:.1f} {unit}"
+        self.details_size.config(text=self.t("folder_size") + "   " + value)
 
     @staticmethod
     def local_time(value):
@@ -2183,93 +2418,58 @@ class App(tk.Tk):
             if limit and limit["resets_at"] > time.time():
                 yield key, limit
 
-    def draw_usage(self, p):
-        area = self.usage_area
-        opt = self.options[p[0]]
-        if not opt.isolated:
-            self.note(area, self.t("shared_usage")).pack(fill="x")
+    def refresh_usage(self, p, *, capture_changed=False):
+        key = self.options[p[0]].key
+        if self.refresh_key == key and not capture_changed:
             return
-        data = self.usage_cache.get(opt.key)
-        if data is None:
-            self.note(area, self.t("loading")).pack(fill="x")
-            return
-        _, tokens, capture = data
-        columns = tk.Frame(area, bg=area["bg"])
-        columns.pack(fill="x", pady=(7, 2))
-        usage = tk.Frame(columns, bg=columns["bg"])
-        quota = tk.Frame(columns, bg=columns["bg"])
-        if self.layout and self.layout[0] == 2:
-            for index, block in enumerate((usage, quota)):
-                columns.columnconfigure(index, weight=1, uniform="usage")
-                block.grid(row=0, column=index, sticky="new", padx=(0, 10) if not index else 0)
-        else:
-            usage.pack(fill="x")
-            quota.pack(fill="x", pady=(8, 0))
-        self.heading(usage, self.t("code_tokens"), 10).pack(fill="x")
-        if tokens and tokens.available:
-            total = format(tokens.total_tokens, ",").replace(",", " ")
-            self.heading(usage, total, 14).pack(anchor="w")
-            for key, value in (("tokens_in", tokens.input_tokens), ("tokens_out", tokens.output_tokens),
-                               ("cache_read", tokens.cache_read_tokens), ("cache_write", tokens.cache_write_tokens)):
-                self.note(usage, self.t(key) + "   " + format(value, ",").replace(",", " ")).pack(fill="x")
-            self.note(usage, self.t("sample_count", n=tokens.requests)).pack(fill="x")
-        else:
-            self.note(usage, self.t("no_usage" if tokens is not None else "usage_error")).pack(fill="x")
-        if tokens and tokens.incomplete:
-            self.note(usage, self.t("partial")).pack(fill="x")
-        self.heading(quota, self.t("quotas"), 10).pack(fill="x")
-        limits = self.limits.get(opt.key, {})
-        windows = list(self.live_windows(limits))
-        if windows:
-            age = time.time() - limits["observed_at"]
-            for key, window in windows:
-                used = window["used_percentage"]
-                self.note(quota, self.t(key) + f"   {used:g}%   ·   " +
-                          self.t("reset_at", time=self.local_time(window["resets_at"])),
-                          color=C["SUB"] if age > 900 else C["TEXTO"]).pack(fill="x")
-                bar = tk.Canvas(quota, height=self.px(4), width=1, bg=C["BTN"], highlightthickness=0)
-                bar.pack(fill="x", pady=(1, 4))
-                band = C["SUB"] if age > 900 else C["AMARELO"] if used > 80 else opt.color
-                def paint(event, canvas=bar, percent=used, color=band):
-                    canvas.delete("all")
-                    canvas.create_rectangle(0, 0, event.width * percent / 100, event.height, fill=color, outline="")
-                bar.bind("<Configure>", paint)
-            self.note(quota, self.t("observed", time=self.local_time(limits["observed_at"])) +
-                      (" · " + self.t("stale") if age > 900 else "")).pack(fill="x")
-        else:
-            self.note(quota, self.t("no_limits")).pack(fill="x")
-        self.action_group(area, [(self.t("capture_off" if capture else "capture_on"),
-                                  lambda: self.toggle_capture(p, not capture), "normal"),
-                                 (self.t("refresh"), lambda: self.refresh_usage(p), "fantasma")])
-
-    def refresh_usage(self, p):
         self.usage_revision += 1
-        self.sizes.pop(self.options[p[0]].key, None)
-        self.usage_cache.pop(self.options[p[0]].key, None)
-        self.recarregar()
+        self.refresh_key = key
+        if key in self.usage_cache:
+            _, tokens, capture = self.usage_cache[key]
+            self.usage_cache[key] = (float("-inf"), tokens, capture)
+        if self.scan_after is not None:
+            self.after_cancel(self.scan_after)
+        self.scan_after = self.after_idle(self.poll_usage)
+        self.update_live()
 
     def poll_usage(self):
         self.scan_after = None
-        try:
-            revision, key, tokens, capture, limits, size = self.scan_queue.get_nowait()
-        except queue.Empty:
-            pass
-        else:
-            self.scanning = False
-            if revision == self.usage_revision:
+        changed = False
+        while True:
+            try:
+                revision, key, tokens, capture, limits, size = self.scan_queue.get_nowait()
+            except queue.Empty:
+                break
+            if key is not None:
+                self.scanning = False
+            if revision != self.usage_revision:
+                continue
+            changed = True
+            self.limits.update(limits)
+            if key is not None:
+                if self.refresh_key == key:
+                    self.refresh_key = None
                 self.usage_cache[key] = (time.monotonic(), tokens, capture)
                 if size is not None:
                     self.sizes[key] = size
-                self.limits.update(limits)
+        now = time.time()
+        if changed or now >= getattr(self, "next_limit_change", 0):
+            # Staleness and resets change the displayed reading even if the transcript is still loading.
+            upcoming = []
+            for snapshot in self.limits.values():
+                if snapshot:
+                    upcoming.append(snapshot["observed_at"] + 901)
+                    upcoming.extend(window["resets_at"] for _, window in self.live_windows(snapshot))
+            self.next_limit_change = min((value for value in upcoming if value > now), default=float("inf"))
             if self.options.get(self.selected):
-                self.recarregar()
+                self.update_live()
         opt = self.options.get(self.selected)
         if opt and not self.scanning:
             data = self.usage_cache.get(opt.key)
             if data is None or time.monotonic() - data[0] > 60:
                 keys = [o.key for o in self.options.values() if o.isolated]
                 self.scanning = True
-                path = self.selected_path if opt.key not in self.sizes else None
+                path = self.selected_path if opt.key not in self.sizes or self.refresh_key == opt.key else None
                 threading.Thread(target=self.scan_usage, args=(BASE, opt.key, keys, self.scan_queue,
                                  self.usage_revision, path), daemon=True).start()
         if self.scan_after is None:
@@ -2285,6 +2485,8 @@ class App(tk.Tk):
                     limits[key] = profile_usage.read_limits(profile_code.code_config_dir(base, key))
                 except (ValueError, OSError):
                     limits[key] = {}
+            # A keyless message contains just the cross-profile limit readings; the scan continues.
+            results.put((revision, None, None, False, limits, None))
             if selected in keys:
                 path = profile_code.code_config_dir(base, selected)
                 tokens = profile_usage.read_usage(path)
@@ -2294,7 +2496,7 @@ class App(tk.Tk):
         except (ValueError, OSError):
             pass
         finally:
-            results.put((revision, selected, tokens, capture, limits, size))
+            results.put((revision, selected, tokens, capture, {}, size))
 
     @staticmethod
     def folder_size(folder):
@@ -2337,7 +2539,11 @@ class App(tk.Tk):
         except (ValueError, OSError) as e:
             dialogo(self, self.t("erro"), str(e))
             return
-        self.refresh_usage(p)
+        if not enable:
+            self.limits.pop(opt.key, None)
+        if cached := self.usage_cache.get(opt.key):
+            self.usage_cache[opt.key] = (cached[0], cached[1], enable)
+        self.refresh_usage(p, capture_changed=True)
 
     def code_action(self, p, copy=False, login=False):
         opt = self.options[p[0]]
@@ -2362,8 +2568,13 @@ class App(tk.Tk):
 
     def feedback(self, text):
         if not self.login_perfil:
-            self.mostrar_status(text, False)
-            self.after(4000, self.esconder_status)
+            if self.feedback_timer is not None:
+                self.after_cancel(self.feedback_timer)
+            self.footer_text.set(text)
+            def clear():
+                self.feedback_timer = None
+                self.footer_text.set(f"v{VERSAO} · Modified edition")
+            self.feedback_timer = self.after(4000, clear)
 
     def precisa_claude(self):
         if not self.claude:
@@ -2389,7 +2600,7 @@ class App(tk.Tk):
             pids = [pid for pid, folder in _claudes_com_pasta() if normalizar(folder) == path]
             result = windows_profiles.focus_profile_window(pids) if pids else windows_profiles.FocusResult.MISSING
             if result == windows_profiles.FocusResult.BLOCKED:
-                self.feedback(self.t("focus_blocked"))
+                dialogo(self, self.t("switch"), self.t("focus_blocked"))
                 return
             if result == windows_profiles.FocusResult.MISSING:
                 if time.monotonic() < self.pending_open.get(path, 0):
@@ -2415,8 +2626,11 @@ class App(tk.Tk):
         self.forcar_estado()
 
     def forcar_estado(self):
-        self.estado = self.calcular_estado()
+        self.status_epoch += 1
         self.recarregar()
+        if self.status_after is not None:
+            self.after_cancel(self.status_after)
+        self.status_after = self.after_idle(self.atualizar_estado)
 
     def confirmar(self, titulo, msg, perigo=False):
         return dialogo(self, titulo, msg, botoes=[(self.t("sim"), True, "primario"),
@@ -2579,13 +2793,14 @@ class App(tk.Tk):
         opt = options[p[0]] if p else None
         color, shortcut = (opt.color, opt.shortcut) if opt else prefs.defaults(options)
         title = self.t("edit_profile" if p else "novo")
-        j = Janela(self, title, largura=470, altura=590)
-        footer = tk.Frame(j, bg=C["PAINEL"])
-        footer.pack(side="bottom", fill="x", padx=16, pady=10)
+        j = Janela(self, title, largura=510, altura=650)
+        footer = tk.Frame(j, bg=C["PAINEL"], padx=self.px(16), pady=self.px(9))
+        footer.pack(side="bottom", fill="x")
+        tk.Frame(j, bg=C["BORDA"], height=1).pack(side="bottom", fill="x")
         scroll = Rolavel(j, C["PAINEL"])
         scroll.pack(fill="both", expand=True)
         form = tk.Frame(scroll.dentro, bg=C["PAINEL"])
-        form.pack(fill="x", padx=18, pady=14)
+        form.pack(fill="x", padx=self.px(16), pady=self.px(13))
         name = tk.StringVar(j, p[1] if p else "")
         photo = tk.StringVar(j, (p[3] or "") if p else "")
         tint = tk.StringVar(j, color)
@@ -2594,91 +2809,183 @@ class App(tk.Tk):
         border = tk.BooleanVar(j, bool(opt.border) if opt else False)
         tray = tk.BooleanVar(j, bool(opt.tray) if opt else False)
         sharing = tk.BooleanVar(j, bool(opt.sharing) if opt else False)
+        traces = []
+        def watch(variable, callback):
+            traces.append((variable, variable.trace_add("write", callback)))
+        def release_traces(event):
+            if event.widget is j:
+                for variable, token in traces:
+                    variable.trace_remove("write", token)
+                traces.clear()
+        j.bind("<Destroy>", release_traces, add="+")
 
-        self.heading(form, title, 15).pack(fill="x")
-        preview = tk.Frame(form, bg=form["bg"])
-        preview.pack(fill="x", pady=8)
-        size = self.px(44)
-        canvas = tk.Canvas(preview, width=size, height=size, bg=form["bg"], highlightthickness=0)
-        canvas.pack(side="left", padx=(0, 8))
+        identity = tk.Frame(form, bg=C["BG"], padx=self.px(14), pady=self.px(12))
+        identity.pack(fill="x")
+        self.heading(identity, title, 16).pack(fill="x", pady=(0, self.px(10)))
+        preview = tk.Frame(identity, bg=identity["bg"])
+        preview.pack(fill="x")
+        preview.columnconfigure(1, weight=1)
+        size = self.px(58)
+        canvas = tk.Canvas(preview, width=size, height=size, bg=preview["bg"], highlightthickness=0)
+        canvas.grid(row=0, column=0, rowspan=2, padx=(0, self.px(12)), sticky="nw")
         def refresh(*_):
-            desenhar_avatar(canvas, name.get(), photo.get(), size, form["bg"], 0, tint.get())
+            desenhar_avatar(canvas, name.get(), photo.get(), size, preview["bg"], 0, tint.get())
         for var in (name, photo, tint):
-            var.trace_add("write", refresh)
+            watch(var, refresh)
         refresh()
-        Botao(preview, self.t("foto"), lambda: self.escolher_foto(
-            (p[0] if p else None, name.get(), "", photo.get()), photo.set, j), tamanho=9).pack(side="left")
+        def choose_photo():
+            self.escolher_foto((p[0] if p else None, name.get(), "", photo.get()), photo.set, j)
+        canvas.configure(cursor="hand2")
+        canvas.bind("<Button-1>", lambda e: choose_photo())
 
-        def entry(key, variable):
-            self.heading(form, self.t(key), 10).pack(fill="x", pady=(8, 3))
-            field = tk.Entry(form, textvariable=variable, bg=C["BTN"], fg=C["TEXTO"],
-                             insertbackground=C["TEXTO"], font=(FONTE, 11), relief="flat")
-            field.pack(fill="x", ipady=4)
+        def entry(parent, key, variable):
+            self.heading(parent, self.t(key), 10).pack(fill="x", pady=(0, self.px(3)))
+            field = tk.Entry(parent, textvariable=variable, width=1, bg=C["CARD"], fg=C["TEXTO"],
+                             insertbackground=C["TEXTO"], font=(FONTE, 11), relief="flat", borderwidth=3,
+                             highlightthickness=self.px(1), highlightbackground=C["BORDA"], highlightcolor=C["ACCENT"])
+            field.pack(fill="x", ipady=self.px(3))
             return field
-        first = entry("name", name)
-        self.heading(form, self.t("color"), 10).pack(fill="x", pady=(9, 4))
-        palette = tk.Frame(form, bg=form["bg"])
+        name_area = tk.Frame(preview, bg=preview["bg"])
+        name_area.grid(row=0, column=1, sticky="ew")
+        first = entry(name_area, "name", name)
+        Botao(preview, self.t("foto"), choose_photo, tipo="fantasma", tamanho=9, padx=4, pady=2).grid(
+            row=1, column=1, sticky="w", pady=(self.px(3), 0))
+        color_row = tk.Frame(identity, bg=identity["bg"])
+        color_row.pack(fill="x", pady=(self.px(8), self.px(3)))
+        self.heading(color_row, self.t("color"), 10).pack(side="left")
+        palette = tk.Frame(identity, bg=identity["bg"])
         palette.pack(fill="x")
+        contrast = self.note(identity, "")
+        swatches = []
+        def luminance(value):
+            rgb = [int(value[i:i+2], 16) / 255 for i in (1, 3, 5)]
+            linear = [v / 12.92 if v < .04045 else ((v + .055) / 1.055)**2.4 for v in rgb]
+            return sum(v * w for v, w in zip(linear, (.2126, .7152, .0722)))
+        def arrange(width):
+            gap = self.px(4)
+            across = max(1, width // (swatches[0].winfo_reqwidth() + gap))
+            for index, button in enumerate(swatches):
+                button.grid(row=index // across, column=index % across, padx=(0, gap), pady=(0, gap), sticky="w")
+        def step(event, delta):
+            following = swatches[(swatches.index(event.widget) + delta) % len(swatches)]
+            following.focus_set()
+            following.invoke()
+            return "break"
+        def add_swatch():
+            button = tk.Radiobutton(palette, variable=tint, indicatoron=False, width=2, borderwidth=1,
+                                    font=(FONTE, 12, "bold"), relief="flat", offrelief="flat", cursor="hand2",
+                                    highlightthickness=self.px(1), highlightbackground=palette["bg"],
+                                    highlightcolor=C["TEXTO"], padx=self.px(2), pady=self.px(1))
+            button.bind("<Left>", lambda event: step(event, -1))
+            button.bind("<Right>", lambda event: step(event, 1))
+            swatches.append(button)
         for value in prefs.COLORS:
-            tk.Radiobutton(palette, text="●", value=value, variable=tint, indicatoron=False,
-                           selectcolor=value, bg=value, fg="white", activeforeground="white", width=2,
-                           activebackground=value, font=(FONTE, 11, "bold"), relief="flat", borderwidth=1,
-                           cursor="hand2", padx=1, pady=1).pack(side="left", padx=(0, 4))
-        contrast = self.note(form, "", color=C["SUB"])
+            add_swatch()
         def check_color(*_):
-            def luminance(hex_color):
-                rgb = [int(hex_color[i:i+2], 16) / 255 for i in (1, 3, 5)]
-                linear = [v / 12.92 if v < .04045 else ((v + .055) / 1.055)**2.4 for v in rgb]
-                return sum(x*y for x, y in zip(linear, (.2126, .7152, .0722)))
-            a, b = sorted((luminance(tint.get()), luminance(form["bg"])))
-            contrast.config(text=self.t("low_contrast") if (b+.05)/(a+.05) < 1.8 else "")
-            for button in palette.winfo_children():
-                button.configure(text="✓" if button["value"] == tint.get() else " ")
-        tint.trace_add("write", check_color)
+            current = tint.get().lower()
+            if current not in prefs.COLORS and len(swatches) == len(prefs.COLORS):
+                add_swatch()
+            for index, button in enumerate(swatches):
+                if index < len(prefs.COLORS):
+                    value = prefs.COLORS[index]
+                else:
+                    value = current if current not in prefs.COLORS else str(button["value"])
+                ink = "#171717" if luminance(value) > .18 else "#ffffff"
+                selected = value == current
+                button.configure(text="✓" if selected else " ", value=value, fg=ink, activeforeground=ink,
+                                 bg=value, selectcolor=value, activebackground=value, takefocus=selected)
+            a, b = sorted((luminance(current), luminance(identity["bg"])))
+            if (b + .05) / (a + .05) < 1.8:
+                contrast.configure(text=self.t("low_contrast"))
+                contrast.pack(fill="x")
+            else:
+                contrast.pack_forget()
+            arrange(palette.winfo_width())
+        palette.bind("<Configure>", lambda e: arrange(e.width))
+        watch(tint, check_color)
         check_color()
         def choose_color():
             _, value = colorchooser.askcolor(tint.get(), title=self.t("color"), parent=j)
             if value:
                 tint.set(value)
-        Botao(form, self.t("custom_color"), choose_color, tipo="fantasma", tamanho=9, pady=2).pack(anchor="w")
-        contrast.pack(fill="x")
-        entry("hotkey", keys)
+        Botao(color_row, self.t("custom_color"), choose_color, tipo="fantasma", tamanho=9, padx=3, pady=2).pack(side="right")
+
+        def section(text):
+            header = tk.Frame(form, bg=form["bg"])
+            header.pack(fill="x", pady=(self.px(15), self.px(6)))
+            self.heading(header, text, 12).pack(side="left")
+            tk.Frame(header, height=1, bg=C["BORDA"]).pack(side="left", fill="x", expand=True, padx=(self.px(10), 0))
+        section("Windows")
+        key_field = entry(form, "hotkey", keys)
         self.note(form, self.t("hotkey_hint") + " " + self.t("hotkey_help")).pack(fill="x")
 
         def checkbox(key, var):
             c = tk.Checkbutton(form, text=self.t(key), variable=var, bg=form["bg"], fg=C["TEXTO"],
                                activebackground=form["bg"], activeforeground=C["TEXTO"], selectcolor=C["BTN"],
                                anchor="w", justify="left", font=(FONTE, 10))
-            c.pack(fill="x", pady=(6, 0))
-            c.bind("<Configure>", lambda e: c.config(wraplength=max(1, e.width - 32)))
+            c.pack(fill="x", pady=(self.px(3), 0))
+            c.bind("<Configure>", lambda e: c.config(wraplength=max(1, e.width - self.px(32))))
             return c
         frame_option = checkbox("border", border)
         if sys.getwindowsversion().build < 22000:
             frame_option.configure(state="disabled")
         checkbox("tray", tray)
+        section(self.t("code_settings"))
         checkbox("isolated", isolated)
         share = checkbox("share_on", sharing)
         def sync_share(*_):
             share.configure(state="normal" if isolated.get() else "disabled")
-        isolated.trace_add("write", sync_share)
+        watch(isolated, sync_share)
         sync_share()
-        self.note(form, self.t("share_items")).pack(fill="x")
+        self.note(form, self.t("share_items")).pack(fill="x", padx=(self.px(23), 0))
         self.note(form, self.t("next_launch")).pack(fill="x", pady=6)
+        actions = tk.Frame(footer, bg=footer["bg"])
+        actions.pack(side="bottom", fill="x")
         error = self.note(footer, "", color=C["VERMELHO"])
-        error.pack(fill="x")
+        invalid_field = None
+        def expose(widget):
+            view = scroll.tela
+            top = widget.winfo_rooty() - view.winfo_rooty()
+            bottom = top + widget.winfo_height()
+            margin = self.px(6)
+            delta = min(0, top - margin) or max(0, bottom + margin - view.winfo_height())
+            if delta:
+                view.yview_moveto((view.canvasy(0) + delta) / max(1, scroll.dentro.winfo_height()))
+        def focused(event):
+            if str(event.widget).startswith(str(form) + "."):
+                expose(event.widget)
+        j.bind("<FocusIn>", focused, add="+")
+        def clear_error(*_):
+            nonlocal invalid_field
+            if invalid_field is not None:
+                invalid_field.configure(highlightbackground=C["BORDA"], highlightcolor=C["ACCENT"])
+                invalid_field = None
+            error.pack_forget()
+        def feedback(message, field=None):
+            nonlocal invalid_field
+            clear_error()
+            error.configure(text=message)
+            error.pack(fill="x", pady=(0, self.px(6)))
+            if field is not None:
+                invalid_field = field
+                field.configure(highlightbackground=C["VERMELHO"], highlightcolor=C["VERMELHO"])
+                field.focus_set()
+                expose(field)
+        for variable in (name, keys, isolated, border, tray, sharing, tint, photo):
+            watch(variable, clear_error)
 
         def save():
             label = name.get().strip()
             if not label:
-                first.focus_set()
+                feedback(self.t("novo_pergunta").rstrip(":： "), first)
                 return
             try:
                 binding = windows_profiles.normalize_shortcut(keys.get())
             except ValueError:
-                error.config(text=self.t("hotkey_hint"))
+                feedback(self.t("hotkey_hint"), key_field)
                 return
             if binding and any(i != (p[0] if p else None) and item.shortcut == binding for i, item in options.items()):
-                error.config(text=self.t("hotkey_busy"))
+                feedback(self.t("hotkey_busy"), key_field)
                 return
             i = None
             assigned = False
@@ -2718,16 +3025,23 @@ class App(tk.Tk):
                         profile_code.share_resources(BASE, key, was_shared)
                     except (OSError, ValueError) as restore_error:
                         reason += "\n" + str(restore_error)
-                error.config(text=reason)
+                field = first if isinstance(e, sqlite3.IntegrityError) else None
+                if reason == self.t("hotkey_busy"):
+                    field = key_field
+                feedback(reason, field)
                 return
             j.destroy()
             self.usage_revision += 1
             self.usage_cache.pop(key, None)
             self.forcar_estado()
 
-        Botao(footer, self.t("save"), save, tipo="primario").pack(side="right")
-        Botao(footer, self.t("cancelar"), j.destroy, tipo="fantasma").pack(side="right", padx=6)
+        Botao(actions, self.t("save"), save, tipo="primario").pack(side="right")
+        Botao(actions, self.t("cancelar"), j.destroy, tipo="fantasma").pack(side="right", padx=self.px(6))
         j.bind("<Return>", lambda e: save() if isinstance(e.widget, tk.Entry) else None)
+        def keyboard_save(event):
+            save()
+            return "break"
+        j.bind("<Control-s>", keyboard_save)
         j.mostrar()
         first.focus_set()
 
@@ -2824,7 +3138,7 @@ def principal():
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RichardKPL.MultiClaude")
     _k32.CreateMutexW.restype = wt.HANDLE
     # Uma instância por pasta: cópias portáteis em pastas diferentes podem rodar juntas.
-    _MUTEX = _k32.CreateMutexW(None, False, "MultiClaude_" + hashlib.md5(normalizar(BASE).encode()).hexdigest()[:16])
+    _MUTEX = _k32.CreateMutexW(None, False, windows_profiles.manager_mutex_name(BASE))
     already_running = ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
     if requested:
         if already_running:
