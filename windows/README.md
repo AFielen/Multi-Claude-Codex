@@ -17,6 +17,8 @@ Für einen Test direkt aus dem Repository legt dieser PowerShell-Aufruf den Kata
 & '.\dist\wpf-win-x64\Multi Claude.exe' --manager-home (Join-Path $env:TEMP 'multi-claude-wpf-testkatalog')
 ```
 
+Solange der Manager läuft, zeigt jedes geöffnete Claude-Desktop-Profil unten rechts auf seinem Taskleistensymbol einen Punkt in der Profilfarbe. Windows gruppiert die Fenster jedes Profils unter einem eigenen Symbol. Eine Änderung der Profilfarbe erscheint auch bei bereits geöffneten Fenstern. Der Punkt ist unabhängig von der Einstellung für den farbigen Fensterrahmen.
+
 Bei Claude-Profilen zeigt **Übersicht** den gemeldeten Fünf-Stunden- und Wochenverbrauch mit Rücksetzzeitpunkt. Dazu im isolierten Profil die Limitanzeige einschalten und Claude Code verwenden. Sobald dessen Statuszeile einen Messwert liefert, kann der Manager ihn anzeigen. Der Tab **Claude Code** summiert die in der lokalen Profilhistorie gespeicherten Token. Die Schaltfläche zum Nachladen lässt die aktive Ansicht stehen. Bei gemeinsam genutzter Code-Konfiguration lässt sich Verbrauch keinem einzelnen Profil zuordnen.
 
 **CPU und RAM** werden etwa alle drei Sekunden aktualisiert, solange der Manager geöffnet ist. Die Anzeige umfasst die Desktop-Prozesse beider Anwendungen sowie isolierte Claude-Code- und Codex-CLI-Sitzungen, die diese Manager-Version über die Terminal-Schaltfläche oder den kopierten Profilbefehl gestartet hat. Laufende Unterprozesse wie Test-Worker zählen zum jeweiligen Profil. Unabhängig gestartete Terminals und gemeinsam genutzte Code-Sitzungen lassen sich keinem Profil eindeutig zuordnen.

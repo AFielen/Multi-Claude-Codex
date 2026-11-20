@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace MultiClaude;
 
-public sealed class WindowsIntegration
+public sealed class WindowsIntegration : IDisposable
 {
     private readonly string home;
     private readonly Dictionary<string, long> pending = new(StringComparer.OrdinalIgnoreCase);
@@ -17,6 +17,8 @@ public sealed class WindowsIntegration
     private readonly ProcessResources resources = new();
     private (string Key, string Folder, long Expires)? login;
     private readonly HashSet<int> colored = [];
+    private Dictionary<string, Profile>? currentProfiles;
+    private bool disposed;
 
     public WindowsIntegration(string home) : this(home,
         provider => provider == ProfileProvider.Codex ? CodexLauncher.FindDesktop() : CodeLauncher.FindDesktop(),
@@ -120,19 +122,66 @@ public sealed class WindowsIntegration
 
     public bool IsRunning(Profile p)
     {
-        var pids = Windows(p.Provider).Matching(p.DesktopPath);
+        var windows = Windows(p.Provider);
+        var (roots, observedByUtcTicks) = windows.Roots();
         lock (colored)
         {
+            if (!roots.TryGetValue(p.DesktopPath, out var pids)) return false;
+            if (disposed) return true;
+            if (currentProfiles != null)
+            {
+                if (!currentProfiles.TryGetValue(p.CodeKey, out var current) || current.Provider != p.Provider ||
+                    !DesktopWindows.SamePath(current.DesktopPath, p.DesktopPath))
+                    return true;
+                p = current;
+            }
+            if (!Regex.IsMatch(p.Color, @"\A#[0-9a-fA-F]{6}\z")) return true;
             foreach (int pid in pids)
             {
-                if (p.Border && Regex.IsMatch(p.Color, @"\A#[0-9a-fA-F]{6}\z"))
+                try
                 {
-                    if (DesktopWindows.Border(pid, p.Color)) colored.Add(pid);
+                    if (windows.UpdateAppearance(home, p, pid, observedByUtcTicks, colored.Contains(pid))) colored.Add(pid);
+                    else colored.Remove(pid);
                 }
-                else if (colored.Remove(pid)) DesktopWindows.Border(pid, null);
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException
+                    or InvalidOperationException or System.Runtime.InteropServices.ExternalException)
+                { /* Keep reporting status if the app exits or Windows declines the decoration. */ }
             }
         }
-        return pids.Count != 0;
+        return true;
+    }
+
+    internal void PruneWindowIcons()
+    {
+        lock (colored)
+        {
+            claudeWindows.PruneIcons();
+            codexWindows.PruneIcons();
+        }
+    }
+
+    internal void SyncProfiles(IReadOnlyList<Profile> profiles)
+    {
+        var next = profiles.ToDictionary(p => p.CodeKey);
+        lock (colored)
+        {
+            if (currentProfiles != null)
+                foreach (var old in currentProfiles.Values)
+                    if (!next.TryGetValue(old.CodeKey, out var profile) || profile.Provider != old.Provider ||
+                        !DesktopWindows.SamePath(old.DesktopPath, profile.DesktopPath))
+                        Windows(old.Provider).RestoreProfile(old);
+            currentProfiles = next;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (colored)
+        {
+            disposed = true;
+            claudeWindows.Dispose();
+            codexWindows.Dispose();
+        }
     }
 
     public bool IsSignedIn(Profile p)

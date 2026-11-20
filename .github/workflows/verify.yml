@@ -22,6 +22,9 @@ jobs:
         run: |
           python -m venv "$env:RUNNER_TEMP\build-venv"
           "$env:RUNNER_TEMP\build-venv\Scripts" >> $env:GITHUB_PATH
+          # Keep temporary fixture paths consistent between Python, PowerShell and Explorer.
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
 
       - name: Install build dependencies
         run: python -m pip install --require-hashes -r requirements-build.txt

@@ -56,9 +56,9 @@ public partial class MainWindow : Window
                 EndLogin();
                 Feedback.Text = T("esgotado");
             }
+            StartStatusRead();
             if (selected == null) return;
             UpdateUsageDisplay();
-            StartStatusRead();
             if (DateTimeOffset.UtcNow >= nextUsage && usageRead == null) RequestUsage(false);
         };
         Closed += (_, _) =>
@@ -67,6 +67,7 @@ public partial class MainWindow : Window
             pulse.Stop();
             usageRead?.Cancel();
             bindings?.Dispose();
+            integration.Dispose();
             SaveGeometry();
         };
     }
@@ -92,6 +93,7 @@ public partial class MainWindow : Window
     private void Reload(string? preferred = null)
     {
         profiles = catalog.Profiles();
+        integration.SyncProfiles(profiles);
         var problems = bindings?.Sync(profiles);
         if (problems?.Count > 0) Feedback.Text = string.Join(" · ", problems);
         var key = preferred ?? selected?.CodeKey ?? catalog.Get("selected_code_key");
