@@ -8,7 +8,7 @@ using MultiClaude;
 
 internal static class IntegrationChecks
 {
-    public static void Run(string tempRoot)
+    public static string Run(string tempRoot)
     {
         Directory.CreateDirectory(tempRoot);
         var app = new WindowsIntegration(tempRoot);
@@ -31,7 +31,7 @@ internal static class IntegrationChecks
         Check(ProfileBindings.NormalizeShortcut("strg + alt + 2") == "Ctrl+Alt+2", "Localized shortcut");
         try { ProfileBindings.NormalizeShortcut("F12"); throw new Exception("Accepted F12"); } catch (ArgumentException) { }
         CheckNativeShortcut();
-        CheckDesktopWindows(tempRoot);
+        string desktopFixture = CheckDesktopWindows(tempRoot);
         Directory.CreateDirectory(one.DesktopPath);
         Directory.CreateDirectory(Path.Combine(one.DesktopPath, "logs"));
         File.WriteAllText(Path.Combine(one.DesktopPath, "Local State"), "{}");
@@ -71,6 +71,7 @@ internal static class IntegrationChecks
             System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shortcut);
             System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
         }
+        return desktopFixture;
     }
 
     private static void CheckNativeShortcut()
@@ -102,7 +103,7 @@ internal static class IntegrationChecks
         finally { window.Close(); }
     }
 
-    private static void CheckDesktopWindows(string root)
+    private static string CheckDesktopWindows(string root)
     {
         string compiler = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe");
@@ -214,6 +215,7 @@ internal static class IntegrationChecks
             CheckExplicitLogin(Path.Combine(root, "manual login"));
         }
         finally { Environment.SetEnvironmentVariable("LOCALAPPDATA", previousLocal); }
+        return fixtureLocal;
     }
 
     private static string? WindowDot(nint hwnd, int kind)

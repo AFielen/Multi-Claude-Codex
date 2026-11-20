@@ -11,6 +11,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Checks" />
     <EmbeddedResource Include="Resources/*.json;Resources/*.ps1" />
+    <EmbeddedResource Include="$(ApplicationIcon)" LogicalName="MultiClaude.Resources.Manager.ico" />
     <Content Include="../../profile_pictures/*.png" Link="gallery/%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../LICENSE;../../NOTICE;../../AUTHORS" Link="%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

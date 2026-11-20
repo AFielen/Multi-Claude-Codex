@@ -58,11 +58,14 @@ public partial class MainWindow
     });
     private void CloseClick(object sender, RoutedEventArgs e) => Safe(() =>
     {
-        if (selected is not { } p) return;
+        if (selected is { } p) CloseProfile(p);
+    });
+    private void CloseProfile(Profile p)
+    {
         if (p.CodeKey == loginProfile?.CodeKey) EndLogin();
         integration.CloseDesktop(p);
         StartStatusRead();
-    });
+    }
     private void LogoutClick(object sender, RoutedEventArgs e) => Safe(() =>
     {
         if (selected is not { Provider: ProfileProvider.Claude } p || !Confirm(T("sair"), Format("sair_q", "n", p.Name))) return;
