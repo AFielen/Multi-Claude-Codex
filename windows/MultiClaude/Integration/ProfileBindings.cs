@@ -143,7 +143,8 @@ public sealed class ProfileBindings : IDisposable
                 try
                 {
                     notify.Icon = icon;
-                    notify.Text = p.Name[..Math.Min(127, p.Name.Length)];
+                    var caption = p.Provider + " · " + p.Name;
+                    notify.Text = caption[..Math.Min(127, caption.Length)];
                     notify.MouseClick += (_, e) =>
                     {
                         if (e.Button == MouseButtons.Left && trays.TryGetValue(p.Id, out var live) && live.Notification == notify)

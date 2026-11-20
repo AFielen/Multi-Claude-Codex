@@ -95,7 +95,7 @@ public partial class MainWindow
         {
             var old = ((results.SelectedItem as ListBoxItem)?.Tag as Profile)?.Id ?? selected?.Id;
             var terms = Fold(query.Text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var matches = profiles.Where(p => terms.All(word => Fold(p.Name).Contains(word, StringComparison.Ordinal))).ToList();
+            var matches = profiles.Where(p => terms.All(word => Fold(ProfileLabel(p)).Contains(word, StringComparison.Ordinal))).ToList();
             results.Items.Clear();
             foreach (var p in matches)
             {
@@ -105,7 +105,7 @@ public partial class MainWindow
                 row.Children.Add(indicator);
                 row.Children.Add(PickerLabel(p));
                 var item = new ListBoxItem { Content = row, Tag = p, HorizontalContentAlignment = HorizontalAlignment.Stretch };
-                AutomationProperties.SetName(item, p.Name);
+                AutomationProperties.SetName(item, ProfileLabel(p));
                 results.Items.Add(item);
                 if (p.Id == old) results.SelectedItem = item;
             }

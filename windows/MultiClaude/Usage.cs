@@ -29,7 +29,7 @@ public static class Usage
 
     public static UsageSnapshot Read(Profile p, CancellationToken token = default)
     {
-        if (!p.Isolated) return new(0, 0, 0, 0, 0, false, false, null, null, null);
+        if (!p.Isolated || p.Provider != ProfileProvider.Claude) return new(0, 0, 0, 0, 0, false, false, null, null, null);
         var root = Root(p);
         var limits = Limits(root);
         bool capture = CaptureEnabled(root);
@@ -210,7 +210,8 @@ public static class Usage
         catch (Exception e) when (FileError(e) || e is JsonException or InvalidOperationException or ArgumentException) { return false; }
     }
 
-    public static (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Seven) ReadLimits(Profile p) => p.Isolated ? Limits(Root(p)) : default;
+    public static (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Seven) ReadLimits(Profile p) =>
+        p.Isolated && p.Provider == ProfileProvider.Claude ? Limits(Root(p)) : default;
 
     private static (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Seven) Limits(string root)
     {
@@ -236,6 +237,7 @@ public static class Usage
 
     public static bool SetCapture(Profile p, bool enable)
     {
+        if (p.Provider != ProfileProvider.Claude) return false;
         var root = Root(p);
         string settings = Path.Combine(root, "settings.json"), flag = Path.Combine(root, Flag), target = Path.Combine(root, Snapshot);
         try

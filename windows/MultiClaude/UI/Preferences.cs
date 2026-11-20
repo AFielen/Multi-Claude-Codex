@@ -92,7 +92,7 @@ public partial class MainWindow
         imports.HorizontalAlignment = HorizontalAlignment.Left;
         dialog.Fields.Children.Add(imports);
         Note(dialog.Fields, T("sobre"), true);
-        Note(dialog.Fields, "Multi Claude 2.3.0 · WPF · Modified edition");
+        Note(dialog.Fields, "Multi Claude + Codex 2.3.0 · WPF · Modified edition");
         var author = Note(dialog.Fields, "");
         var link = new Hyperlink(new Run("Based on Multi Claude, created by Richard KPL")) { ToolTip = "https://github.com/RichardKPL" };
         link.Click += AuthorClick;
@@ -116,7 +116,10 @@ public partial class MainWindow
     {
         var dialog = new Form(this, T("apagar_tudo"), 415, 320);
         Note(dialog.Fields, T("apagar_tudo_sub"), true);
-        Note(dialog.Fields, T("pastas_preservadas") + "\n" + T("hold_code"));
+        var notices = new List<string> { T("pastas_preservadas") };
+        if (profiles.Any(p => p.Provider == ProfileProvider.Claude)) notices.Add(T("hold_code"));
+        if (profiles.Any(p => p.Provider == ProfileProvider.Codex)) notices.Add(T("hold_codex"));
+        Note(dialog.Fields, string.Join("\n", notices));
         string word = T("palavra");
         Note(dialog.Fields, Format("apagar_confirma", "p", word));
         var field = new TextBox();

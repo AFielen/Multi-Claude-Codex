@@ -18,6 +18,21 @@ class Settings:
     tray: int
 
 
+def has_provider(con):
+    return any(r[1] == "provider" for r in con.execute("PRAGMA table_info(profile_options)"))
+
+
+def require_claude_catalog(con, profile_key=None):
+    """The Python manager's launch, logout and reset paths only understand Claude."""
+    if not has_provider(con):
+        return
+    sql = "SELECT 1 FROM profile_options WHERE provider IS NOT 'claude'"
+    row = con.execute(sql if profile_key is None else sql + " AND code_key=?",
+                      () if profile_key is None else (profile_key,)).fetchone()
+    if row:
+        raise OSError("Open this profile catalog with the Multi Claude + Codex Windows (WPF) edition.")
+
+
 def migrate(con):
     con.execute("""
         CREATE TABLE IF NOT EXISTS profile_options (

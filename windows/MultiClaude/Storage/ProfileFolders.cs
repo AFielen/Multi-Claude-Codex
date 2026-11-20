@@ -8,7 +8,7 @@ public sealed partial class Catalog
         return configured.Length > 0 ? configured : Environment.GetFolderPath(fallback);
     }
 
-    private bool Protected(string folder)
+    private bool Protected(string folder, bool codexProfile = false)
     {
         string? physical = StoragePaths.PhysicalPath(folder);
         if (physical == null) return true;
@@ -16,16 +16,40 @@ public sealed partial class Catalog
         string local = UserFolder("LOCALAPPDATA", Environment.SpecialFolder.LocalApplicationData);
         string roaming = UserFolder("APPDATA", Environment.SpecialFolder.ApplicationData);
         string user = UserFolder("USERPROFILE", Environment.SpecialFolder.UserProfile);
+        // Reserve both managed trees in every catalog, including catalogs linked from another home.
+        string basePath = codexProfile ? Path.GetDirectoryName(Path.GetDirectoryName(folder))! : folder;
+        string? child = null;
+        for (var node = new DirectoryInfo(basePath); node.Parent != null; node = node.Parent)
+        {
+            if ((StoragePaths.Comparer.Equals(node.Name, "codex-home") || StoragePaths.Comparer.Equals(node.Name, "codex-desktop")) &&
+                (ValidKey(child) || StoragePaths.Comparer.Equals(node.Parent.FullName, Home) || File.Exists(Path.Combine(node.Parent.FullName, "perfis.db"))))
+                return true;
+            child = node.Name;
+        }
         foreach (string ancestor in new[] { Home, Data, Pictures, user })
             if (StoragePaths.Contains(folder, StoragePaths.PhysicalPath(ancestor) ?? ancestor)) return true;
         var forbidden = new[] { Pictures, Path.Combine(Home, "claude-code"), Path.Combine(Home, "profile_shortcuts"),
-            Path.Combine(roaming, "Claude"), Path.Combine(local, "Claude"), Path.Combine(local, "Claude-Data"), Path.Combine(local, "AnthropicClaude") };
+            Path.Combine(roaming, "Claude"), Path.Combine(local, "Claude"), Path.Combine(local, "Claude-Data"), Path.Combine(local, "AnthropicClaude"),
+            Path.Combine(user, ".codex"),
+            Path.Combine(roaming, "Codex"), Path.Combine(roaming, "ChatGPT"), Path.Combine(local, "Codex"), Path.Combine(local, "ChatGPT"),
+            Path.Combine(roaming, "OpenAI", "Codex"), Path.Combine(roaming, "OpenAI", "ChatGPT"),
+            Path.Combine(local, "OpenAI", "Codex"), Path.Combine(local, "OpenAI", "ChatGPT") };
         foreach (string root in forbidden)
-            if (StoragePaths.Contains(StoragePaths.PhysicalPath(root) ?? root, folder)) return true;
+        {
+            string resolved = StoragePaths.PhysicalPath(root) ?? root;
+            if (StoragePaths.Contains(resolved, folder) || StoragePaths.Contains(folder, resolved)) return true;
+        }
+        string configured = StoragePaths.Resolve(Environment.GetEnvironmentVariable("CODEX_HOME"));
+        string inherited = StoragePaths.PhysicalPath(configured) ?? configured;
+        bool currentTerminalHome = codexProfile && StoragePaths.Comparer.Equals(Path.GetFileName(Path.GetDirectoryName(folder)), "codex-home") &&
+            StoragePaths.Comparer.Equals(folder, inherited);
+        if (!currentTerminalHome &&
+            (StoragePaths.Contains(inherited, folder) || StoragePaths.Contains(folder, inherited))) return true;
         string packages = Path.Combine(local, "Packages");
         packages = StoragePaths.PhysicalPath(packages) ?? packages;
-        return StoragePaths.Contains(packages, folder) && Path.GetRelativePath(packages, folder).Split(Path.DirectorySeparatorChar)[0]
-            .Contains("claude", StringComparison.OrdinalIgnoreCase);
+        if (!StoragePaths.Contains(packages, folder)) return false;
+        string package = Path.GetRelativePath(packages, folder).Split(Path.DirectorySeparatorChar)[0];
+        return new[] { "claude", "codex", "chatgpt" }.Any(name => package.Contains(name, StringComparison.OrdinalIgnoreCase));
     }
 
     internal bool Recognized(string folder) => StoragePaths.Ordinary(folder) && !Protected(folder) &&
@@ -49,7 +73,52 @@ public sealed partial class Catalog
             throw new IOException($"Invalid profile folder: {path}");
     }
 
-    public void ValidateDesktop(Profile profile) => ValidateFolder(profile.DesktopPath);
+    private void ValidateCodexFolders(Profile profile)
+    {
+        if (!ValidKey(profile.CodeKey) || !profile.Isolated || profile.Sharing)
+            throw new IOException("Invalid Codex profile identity or settings.");
+        StoragePaths.RequireOrdinary(profile.CodeHome);
+        string desktop = Path.Combine(profile.CodeHome, "codex-desktop", profile.CodeKey);
+        if (!StoragePaths.Comparer.Equals(profile.DesktopPath, desktop))
+            throw new IOException("The Codex desktop folder must match its profile key and catalog.");
+        foreach (string folder in new[] { desktop, Path.Combine(profile.CodeHome, "codex-home", profile.CodeKey) })
+        {
+            StoragePaths.RequireOrdinary(folder);
+            if (Protected(folder, codexProfile: true) || File.Exists(folder))
+                throw new IOException($"Invalid Codex profile folder: {folder}");
+        }
+    }
+
+    public void ValidateDesktop(Profile profile)
+    {
+        switch (profile.Provider)
+        {
+            case ProfileProvider.Claude: ValidateFolder(profile.DesktopPath); break;
+            case ProfileProvider.Codex: ValidateCodexFolders(profile); break;
+            default: throw new ArgumentException("Unsupported profile provider.");
+        }
+    }
+
+    private string NewDesktopFolder(Profile profile, HashSet<string> registered)
+    {
+        if (profile.Provider == ProfileProvider.Codex)
+        {
+            string desktop = Path.Combine(Home, "codex-desktop", profile.CodeKey);
+            ValidateCodexFolders(profile with { DesktopPath = desktop });
+            if (registered.Contains(StoragePaths.PhysicalPath(desktop) ?? desktop) || Path.Exists(desktop) ||
+                Path.Exists(Path.Combine(Home, "codex-home", profile.CodeKey)))
+                throw new IOException("Codex storage already exists for this profile key.");
+            return desktop;
+        }
+        StoragePaths.RequireOrdinary(Data);
+        string slug = StoragePaths.Slug(profile.Name.Trim());
+        string folder = Path.Combine(Data, slug);
+        int suffix = 2;
+        while (Path.Exists(folder) || registered.Contains(StoragePaths.PhysicalPath(folder) ?? folder))
+            folder = Path.Combine(Data, $"{slug}_{suffix++}");
+        ValidateFolder(folder);
+        return folder;
+    }
 
     private static HashSet<string> RegisteredPaths(IEnumerable<Profile> profiles) =>
         profiles.Select(p => StoragePaths.PhysicalPath(p.DesktopPath) ?? p.DesktopPath).ToHashSet(StoragePaths.Comparer);
@@ -152,7 +221,18 @@ public sealed partial class Catalog
             int count = 0;
             foreach (var candidate in imports)
             {
-                if (!NewRecognizedPath(paths, candidate.DesktopPath)) continue;
+                if (candidate.Provider == ProfileProvider.Codex)
+                {
+                    ValidateCodexFolders(candidate);
+                    string physical = StoragePaths.PhysicalPath(candidate.DesktopPath)!;
+                    if (!paths.Add(physical))
+                    {
+                        if (current.Any(p => p.CodeKey == candidate.CodeKey && p.Provider == candidate.Provider &&
+                            StoragePaths.Comparer.Equals(StoragePaths.PhysicalPath(p.DesktopPath), physical))) continue;
+                        throw new IOException($"Codex desktop folder is already registered: {candidate.Name}");
+                    }
+                }
+                else if (!NewRecognizedPath(paths, candidate.DesktopPath)) continue;
                 if (!ValidKey(candidate.CodeKey) || current.Any(p => p.CodeKey == candidate.CodeKey) || candidate.CodeHome.Length == 0)
                     throw new IOException($"Profile identity conflict: {candidate.Name}");
                 // Duplicate numeric row IDs are database-local. Persistent UUIDs and both account paths remain exact.
@@ -172,9 +252,16 @@ public sealed partial class Catalog
     private string? EraseIdentity(Sqlite db, Profile p, List<Profile> all)
     {
         string path = p.DesktopPath;
-        if (!all.Any(x => x.Id == p.Id && x.CodeKey == p.CodeKey && x.StoredPath == p.StoredPath && StoragePaths.Comparer.Equals(x.DesktopPath, path)) ||
-            !ManagedChild(path) ||
-            !StoragePaths.Ordinary(path) || !Directory.Exists(path) || Protected(path)) return null;
+        if (!all.Any(x => x.Id == p.Id && x.CodeKey == p.CodeKey && x.StoredPath == p.StoredPath && x.Provider == p.Provider &&
+                          StoragePaths.Comparer.Equals(x.CodeHome, p.CodeHome) && StoragePaths.Comparer.Equals(x.DesktopPath, path)) ||
+            !StoragePaths.Ordinary(path) || !Directory.Exists(path)) return null;
+        if (p.Provider == ProfileProvider.Codex)
+        {
+            if (!StoragePaths.Comparer.Equals(Home, p.CodeHome)) return null;
+            try { ValidateCodexFolders(p); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        }
+        else if (!ManagedChild(path) || Protected(path)) return null;
         string? target = StoragePaths.PhysicalPath(path);
         if (target == null) return null;
         foreach (var other in all.Where(x => x.Id != p.Id && x.DesktopPath.Length != 0))
@@ -184,7 +271,10 @@ public sealed partial class Catalog
         }
         string identity = StoragePaths.Identity(path);
         string? pending = db.Scalar("SELECT valor FROM config WHERE chave=?", $"apagar_perfil_{p.Id}");
-        return (pending != null ? pending == identity : Recognized(path)) ? identity : null;
+        if (pending != null) return pending == identity ? identity : null;
+        if (p.Provider == ProfileProvider.Claude) return Recognized(path) ? identity : null;
+        try { return StoragePaths.RequireUnsharedFile(Path.Combine(path, "Local State")) ? identity : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
     }
 
     public bool CanErase(Profile p)
@@ -219,7 +309,8 @@ public sealed partial class Catalog
         if (erase) Erase(db, p);
         db.Transaction(() =>
         {
-            if (List(db, Home, p.CodeKey).SingleOrDefault() is { } current && current.Id == p.Id && current.StoredPath == p.StoredPath)
+            if (List(db, Home, p.CodeKey).SingleOrDefault() is { } current && current.Id == p.Id &&
+                current.StoredPath == p.StoredPath && current.Provider == p.Provider)
             {
                 db.Run("DELETE FROM perfis WHERE id=?", p.Id);
                 Set(db, $"apagar_perfil_{p.Id}", null);

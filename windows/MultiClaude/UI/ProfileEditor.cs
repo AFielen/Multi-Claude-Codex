@@ -14,6 +14,17 @@ public partial class MainWindow
     {
         var draft = existing ?? catalog.Draft();
         var dialog = new Form(this, T(existing == null ? "novo" : "edit_profile"), 420, 505);
+        Note(dialog.Fields, T("provider"), true);
+        var provider = new ComboBox
+        {
+            ItemsSource = Enum.GetValues<ProfileProvider>(),
+            SelectedItem = draft.Provider,
+            IsEnabled = existing == null,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 150
+        };
+        Identify(provider, "ProfileProvider", T("provider"));
+        dialog.Fields.Children.Add(provider);
         Note(dialog.Fields, T("name"), true);
         var name = new TextBox { Text = draft.Name, Padding = new Thickness(4, 3, 4, 3) };
         Identify(name, "ProfileName", T("name"));
@@ -86,24 +97,35 @@ public partial class MainWindow
         Identify(shortcut, "ShortcutKeys", T("hotkey"));
         dialog.Fields.Children.Add(shortcut);
         Note(dialog.Fields, T("hotkey_hint"));
-        CheckBox Toggle(string key, bool value)
+        CheckBox Toggle(Panel panel, string key, bool value)
         {
             var box = new CheckBox { Content = T(key), IsChecked = value, Margin = new Thickness(0, 3, 0, 2) };
             Identify(box, "Option_" + key, T(key));
-            dialog.Fields.Children.Add(box);
+            panel.Children.Add(box);
             return box;
         }
-        var border = Toggle("border", draft.Border);
+        var border = Toggle(dialog.Fields, "border", draft.Border);
         border.IsEnabled = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000);
-        var tray = Toggle("tray", draft.Tray);
-        Note(dialog.Fields, T("code_settings"), true);
-        var isolated = Toggle("isolated", draft.Isolated);
-        var share = Toggle("share_on", draft.Sharing);
+        var tray = Toggle(dialog.Fields, "tray", draft.Tray);
+        var claudeOptions = new StackPanel();
+        dialog.Fields.Children.Add(claudeOptions);
+        Note(claudeOptions, T("code_settings"), true);
+        var isolated = Toggle(claudeOptions, "isolated", draft.Isolated);
+        var share = Toggle(claudeOptions, "share_on", draft.Sharing);
         share.IsEnabled = draft.Isolated;
         isolated.Checked += (_, _) => share.IsEnabled = true;
         isolated.Unchecked += (_, _) => share.IsEnabled = false;
-        Note(dialog.Fields, T("share_items"));
-        Note(dialog.Fields, T("next_launch"));
+        Note(claudeOptions, T("share_items"));
+        Note(claudeOptions, T("next_launch"));
+        var codexNote = Note(dialog.Fields, T("codex_account"));
+        void ShowProviderOptions()
+        {
+            bool claude = provider.SelectedItem is ProfileProvider.Claude;
+            claudeOptions.Visibility = ShowIf(claude);
+            codexNote.Visibility = ShowIf(!claude);
+        }
+        ShowProviderOptions();
+        provider.SelectionChanged += (_, _) => ShowProviderOptions();
 
         string? savedKey = null;
         void Save()
@@ -118,16 +140,18 @@ public partial class MainWindow
             catch (Exception) { dialog.Warning.Text = T("hotkey_hint"); shortcut.Focus(); return; }
             if (keys.Length > 0 && profiles.Any(p => p.Id != draft.Id && p.Shortcut.Equals(keys, StringComparison.OrdinalIgnoreCase)))
             { dialog.Warning.Text = T("hotkey_busy"); shortcut.Focus(); return; }
+            var selectedProvider = (ProfileProvider)provider.SelectedItem;
             var edited = draft with
             {
                 Name = name.Text.Trim(),
+                Provider = selectedProvider,
                 Photo = photo,
                 Color = color,
                 Shortcut = keys,
                 Border = border.IsChecked == true,
                 Tray = tray.IsChecked == true,
-                Isolated = isolated.IsChecked == true,
-                Sharing = isolated.IsChecked == true && share.IsChecked == true
+                Isolated = selectedProvider == ProfileProvider.Codex || isolated.IsChecked == true,
+                Sharing = selectedProvider == ProfileProvider.Claude && isolated.IsChecked == true && share.IsChecked == true
             };
             Profile? assigned = null;
             bool shareChanged = false;

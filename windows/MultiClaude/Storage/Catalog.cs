@@ -3,10 +3,13 @@ using System.Text.RegularExpressions;
 
 namespace MultiClaude;
 
+public enum ProfileProvider { Claude, Codex }
+
 public sealed record Profile(long Id, string Name, string StoredPath, string DesktopPath, string? Photo,
     string CodeKey, int Position, string Color, string Shortcut, bool Isolated, bool Border, bool Sharing,
     string? LastOpen, bool Tray)
 {
+    public ProfileProvider Provider { get; init; } = ProfileProvider.Claude;
     public string CodeHome { get; init; } = "";
     public string? Created { get; init; }
     public override string ToString() => Name;
@@ -43,6 +46,7 @@ public sealed partial class Catalog
                     border INTEGER NOT NULL DEFAULT 0, sharing INTEGER NOT NULL DEFAULT 0, last_open TEXT, tray INTEGER NOT NULL DEFAULT 0)
                 """);
             if (!Has(db, "profile_options", "tray")) db.Run("ALTER TABLE profile_options ADD COLUMN tray INTEGER NOT NULL DEFAULT 0");
+            if (!Has(db, "profile_options", "provider")) db.Run("ALTER TABLE profile_options ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'");
             db.Run("""
                 CREATE TRIGGER IF NOT EXISTS remove_profile_options AFTER DELETE ON perfis
                 BEGIN DELETE FROM profile_options WHERE profile=OLD.id; END
@@ -59,20 +63,38 @@ public sealed partial class Catalog
     private static bool Has(Sqlite db, string table, string column) =>
         db.Query($"PRAGMA table_info({table})").Any(r => r[1] == column);
 
+    private static string ProviderValue(Profile p) => p.Provider switch
+    {
+        ProfileProvider.Claude => "claude",
+        ProfileProvider.Codex when p.Isolated && !p.Sharing => "codex",
+        ProfileProvider.Codex => throw new ArgumentException("Codex profiles require separate settings and sign-in."),
+        _ => throw new ArgumentException("Unsupported profile provider.")
+    };
+
     private static List<Profile> List(Sqlite db, string home, string? key = null, bool historical = false)
     {
         string photo = historical && !Has(db, "perfis", "foto") ? "NULL" : "foto";
         string created = historical && !Has(db, "perfis", "criado") ? "NULL" : "criado";
         string tray = historical && !Has(db, "profile_options", "tray") ? "0" : "tray";
+        string provider = historical && !Has(db, "profile_options", "provider") ? "'claude'" : "provider";
         string codeHome = historical && !Has(db, "config", "valor") ? "NULL" : "(SELECT valor FROM config WHERE chave='wpf_code_home_' || code_key)";
         string sql = $"""
-            SELECT id,nome,pasta,{photo},code_key,position,color,shortcut,isolated,border,sharing,last_open,{tray},{created},{codeHome}
+            SELECT id,nome,pasta,{photo},code_key,position,color,shortcut,isolated,border,sharing,last_open,{tray},{created},{codeHome},{provider}
             FROM perfis JOIN profile_options ON profile=id
             """;
         var rows = key == null ? db.Query(sql + " ORDER BY position,id") : db.Query(sql + " WHERE code_key=?", key);
         return rows.Select(r => new Profile(long.Parse(r[0]!, CultureInfo.InvariantCulture), r[1]!, r[2] ?? "", StoragePaths.Resolve(r[2], home), r[3],
             r[4]!, int.Parse(r[5]!, CultureInfo.InvariantCulture), r[6]!, r[7]!, r[8] != "0", r[9] != "0", r[10] != "0", r[11], r[12] != "0")
-        { Created = r[13], CodeHome = r[14] is null ? home : StoragePaths.Resolve(r[14]) }).ToList();
+        {
+            Created = r[13], CodeHome = r[14] is null ? home : StoragePaths.Resolve(r[14]),
+            Provider = r[15] switch
+            {
+                "claude" => ProfileProvider.Claude,
+                "codex" when r[8] == "1" && r[10] == "0" => ProfileProvider.Codex,
+                "codex" => throw new IOException("Invalid Codex profile settings."),
+                _ => throw new IOException("Unsupported profile provider.")
+            }
+        }).ToList();
     }
 
     public List<Profile> Profiles() { using var db = Open(); return List(db, Home); }
@@ -84,6 +106,7 @@ public sealed partial class Catalog
         var file = Path.Combine(home, "perfis.db");
         if (!StoragePaths.RequireUnsharedFile(file)) return null;
         using var db = new Sqlite(file, readOnly: true);
+        if (!Has(db, "profile_options", "code_key")) return null;
         return List(db, home, key, historical: true).FirstOrDefault();
     }
 
@@ -106,9 +129,9 @@ public sealed partial class Catalog
 
     private static void InsertOptions(Sqlite db, long id, Profile p) =>
         db.Run("""
-            INSERT INTO profile_options(profile,code_key,position,color,shortcut,isolated,border,sharing,last_open,tray)
-            VALUES(?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM profile_options),?,?,?,?,?,?,?)
-            """, id, p.CodeKey, p.Color, p.Shortcut, p.Isolated, p.Border, p.Isolated && p.Sharing, p.LastOpen, p.Tray);
+            INSERT INTO profile_options(profile,code_key,position,color,shortcut,isolated,border,sharing,last_open,tray,provider)
+            VALUES(?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM profile_options),?,?,?,?,?,?,?,?)
+            """, id, p.CodeKey, p.Color, p.Shortcut, p.Isolated, p.Border, p.Isolated && p.Sharing, p.LastOpen, p.Tray, ProviderValue(p));
 
     public Profile Save(Profile draft, Action<Profile>? beforeCommit = null)
     {
@@ -116,27 +139,20 @@ public sealed partial class Catalog
         if (name.Length == 0 || name.Contains('\0')) throw new ArgumentException("Enter a profile name.");
         if (!Regex.IsMatch(draft.Color, @"\A#[0-9a-fA-F]{6}\z")) throw new ArgumentException("Invalid profile color.");
         if (!ValidKey(draft.CodeKey)) throw new ArgumentException("Invalid profile identity.");
+        _ = ProviderValue(draft);
         using var db = Open();
         return db.Transaction(() =>
         {
             var all = List(db, Home);
             var original = all.SingleOrDefault(p => p.Id == draft.Id && p.CodeKey == draft.CodeKey);
             if (draft.Id != 0 && original == null) throw new IOException("Profile changed or was removed.");
+            if (original != null && original.Provider != draft.Provider) throw new ArgumentException("A profile's provider cannot be changed.");
             if (draft.Shortcut.Length > 0 && all.Any(p => p.Id != draft.Id && p.Shortcut.Equals(draft.Shortcut, StringComparison.OrdinalIgnoreCase)))
                 throw new ArgumentException("The shortcut is already assigned to a profile.");
             long id = draft.Id;
             if (original == null)
             {
-                string slug = StoragePaths.Slug(name);
-                string folder = Path.Combine(Data, slug);
-                var used = RegisteredPaths(all);
-                int suffix = 2;
-                StoragePaths.RequireOrdinary(Data);
-                while (Path.Exists(folder) || used.Contains(StoragePaths.PhysicalPath(folder) ?? folder))
-                {
-                    folder = Path.Combine(Data, $"{slug}_{suffix++}");
-                }
-                ValidateFolder(folder);
+                string folder = NewDesktopFolder(draft with { CodeHome = Home }, RegisteredPaths(all));
                 db.Run("INSERT INTO perfis(nome,pasta,foto) VALUES (?,?,?)", name, Path.GetRelativePath(Home, folder), draft.Photo);
                 id = db.LastId;
                 InsertOptions(db, id, draft);

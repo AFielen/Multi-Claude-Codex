@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace MultiClaude;
 
-internal sealed class DesktopWindows
+internal sealed class DesktopWindows(ProfileProvider provider = ProfileProvider.Claude)
 {
     private readonly object gate = new();
     private Dictionary<string, List<int>> snapshot = new(StringComparer.OrdinalIgnoreCase);
@@ -36,7 +36,8 @@ internal sealed class DesktopWindows
         var byFolder = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         // WMI supplies command lines through its supported process provider. No debugging or process-memory access.
         using var current = Process.GetCurrentProcess();
-        string query = $"SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='claude.exe' AND SessionId={current.SessionId} AND (CommandLine LIKE '%--user-data-dir=%' OR CommandLine IS NULL)";
+        string executable = provider == ProfileProvider.Codex ? "(Name='ChatGPT.exe' OR Name='Codex.exe')" : "Name='claude.exe'";
+        string query = $"SELECT ProcessId, CommandLine FROM Win32_Process WHERE {executable} AND SessionId={current.SessionId} AND (CommandLine LIKE '%--user-data-dir=%' OR CommandLine IS NULL)";
         // A process born after this boundary cannot safely inherit a cached profile-to-PID association.
         long beforeQuery = DateTime.UtcNow.Ticks;
         dynamic? locator = null, service = null, records = null;
@@ -52,7 +53,7 @@ internal sealed class DesktopWindows
                     string? command = Property(row, "CommandLine") as string;
                     if (string.IsNullOrEmpty(command))
                     {
-                        if (strict) throw new IOException("Windows konnte eine laufende Claude-Instanz nicht zuordnen.");
+                        if (strict) throw new IOException($"Windows konnte eine laufende {provider}-Instanz nicht zuordnen.");
                         continue;
                     }
                     string? folder = FolderFromCommand(command, strict);
@@ -86,7 +87,7 @@ internal sealed class DesktopWindows
     internal static string? FolderFromCommand(string command, bool strict)
     {
         var argv = CommandLineToArgvW(command, out int count);
-        if (argv == 0) throw new IOException("Windows konnte die Claude-Befehlszeile nicht lesen.");
+        if (argv == 0) throw new IOException("Windows konnte die Desktop-Befehlszeile nicht lesen.");
         try
         {
             string? path = null;
@@ -103,7 +104,7 @@ internal sealed class DesktopWindows
                 }
             }
             if (matches == 1 && !string.IsNullOrEmpty(path)) return path;
-            if (matches > 0 && strict) throw new IOException("Windows konnte den Claude-Profilpfad nicht eindeutig bestimmen.");
+            if (matches > 0 && strict) throw new IOException("Windows konnte den Desktop-Profilpfad nicht eindeutig bestimmen.");
             return null;
         }
         finally { LocalFree(argv); }
@@ -143,7 +144,7 @@ internal sealed class DesktopWindows
             if (IsIconic(hwnd)) ShowWindowAsync(hwnd, 9);
             if (SetForegroundWindow(hwnd)) return true;
         }
-        if (blocked) throw new IOException("Windows hat den Fensterwechsel blockiert. Bitte das Claude-Fenster über die Taskleiste öffnen.");
+        if (blocked) throw new IOException("Windows hat den Fensterwechsel blockiert. Bitte das Profilfenster über die Taskleiste öffnen.");
         return false;
     }
 

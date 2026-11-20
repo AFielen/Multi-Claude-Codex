@@ -300,8 +300,9 @@ class EditorTests(unittest.TestCase):
         second = self.create("Arbeit")
         self.ui.select_profile(second[0])
         self.ui.update()
-        with patch.object(self.ui, "abrir") as open_profile:
+        with patch.object(self.ui, "abrir") as open_profile, patch.object(self.mod, "time", wraps=self.mod.time) as clock:
             for click in range(2):
+                clock.monotonic.return_value = 10 + click * 0.05
                 row = self.ui.sidebar_rows[first[0]]
                 for event in ("<ButtonPress-1>", "<ButtonRelease-1>"):
                     row.event_generate(event, x=8, y=8)

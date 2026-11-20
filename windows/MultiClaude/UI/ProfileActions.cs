@@ -16,7 +16,7 @@ public partial class MainWindow
     private void CancelLoginClick(object sender, RoutedEventArgs e) => EndLogin();
     private void LoginClick(object sender, RoutedEventArgs e) => Safe(() =>
     {
-        if (selected is not { } p) return;
+        if (selected is not { Provider: ProfileProvider.Claude } p) return;
         EndLogin();
         integration.BeginLogin(p);
         loginProfile = p;
@@ -27,7 +27,7 @@ public partial class MainWindow
     });
     private void PasteClick(object sender, RoutedEventArgs e) => Safe(() =>
     {
-        if (loginProfile is not { } p || selected?.CodeKey != p.CodeKey) return;
+        if (loginProfile is not { Provider: ProfileProvider.Claude } p || selected?.CodeKey != p.CodeKey) return;
         var attempt = loginDeadline;
         var dialog = new Form(this, T("colar") + " · " + p.Name, 406, 210);
         Note(dialog.Fields, p.Name, true);
@@ -65,7 +65,7 @@ public partial class MainWindow
     });
     private void LogoutClick(object sender, RoutedEventArgs e) => Safe(() =>
     {
-        if (selected is not { } p || !Confirm(T("sair"), Format("sair_q", "n", p.Name))) return;
+        if (selected is not { Provider: ProfileProvider.Claude } p || !Confirm(T("sair"), Format("sair_q", "n", p.Name))) return;
         EndLogin();
         integration.SignOut(p);
         Feedback.Text = Format("saiu", "n", p.Name);
@@ -79,10 +79,12 @@ public partial class MainWindow
         try { integration.OpenCode(p, login); }
         catch (FileNotFoundException)
         {
-            var dialog = new Form(this, T("code_settings"), 390, 172);
-            Note(dialog.Fields, T("missing_cli"));
+            bool codex = p.Provider == ProfileProvider.Codex;
+            var dialog = new Form(this, codex ? "Codex CLI" : T("code_settings"), 390, 172);
+            Note(dialog.Fields, T(codex ? "codex_missing_cli" : "missing_cli"));
             dialog.Action(T("fechar"), dialog.Close);
-            dialog.Action("code.claude.com ↗", () => { OpenInShell("https://code.claude.com/docs/en/setup"); dialog.Close(); });
+            var docs = new Uri(codex ? "https://developers.openai.com/codex/cli/" : "https://code.claude.com/docs/en/setup");
+            dialog.Action(docs.Host + " ↗", () => { OpenInShell(docs.AbsoluteUri); dialog.Close(); });
             dialog.ShowDialog();
         }
     }
@@ -103,7 +105,7 @@ public partial class MainWindow
     {
         if (selected is not { } p) return;
         var clean = new string(p.Name.Select(c => char.IsLetterOrDigit(c) || c is ' ' or '-' ? c : '_').Take(60).ToArray()).Trim();
-        var dialog = new SaveFileDialog { Title = T("save_link"), FileName = "Claude - " + clean + ".lnk", DefaultExt = ".lnk", Filter = "Windows|*.lnk" };
+        var dialog = new SaveFileDialog { Title = T("save_link"), FileName = p.Provider + " - " + clean + ".lnk", DefaultExt = ".lnk", Filter = "Windows|*.lnk" };
         if (dialog.ShowDialog(this) == true) integration.SaveShortcut(p, dialog.FileName);
     });
     private void DeleteClick(object sender, RoutedEventArgs e) => Safe(() =>
@@ -113,7 +115,7 @@ public partial class MainWindow
         var message = Format("excluir_q", "n", p.Name);
         if (!canErase) message += "\n\n" + T("pastas_preservadas");
         var code = integration.CodeDirectory(p);
-        if (Directory.Exists(code)) message += "\n\n" + T("hold_code") + "\n" + code;
+        if (Directory.Exists(code)) message += "\n\n" + T(p.Provider == ProfileProvider.Codex ? "hold_codex" : "hold_code") + "\n" + code;
         if (!Confirm(T("excluir"), message)) return;
         var erase = canErase && Confirm(T("excluir"), T("excluir_dados"));
         if (p.CodeKey == loginProfile?.CodeKey) EndLogin();

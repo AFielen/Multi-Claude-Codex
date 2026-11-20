@@ -15,6 +15,7 @@ import sys
 import tempfile
 import _winapi
 
+from profile_settings import require_claude_catalog
 
 _SHARED = {"skills": True, "agents": True, "commands": True, "CLAUDE.md": False}
 _MEMORY_IMPORT = b"<!-- Multi Claude shared instructions -->\n@~/.claude/CLAUDE.md\n"
@@ -233,8 +234,15 @@ def run_terminal_command(default_base, arguments):
             raise FileNotFoundError(str(catalog))
         try:
             with contextlib.closing(sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True)) as db:
+                require_claude_catalog(db, profile_id)
                 found = db.execute("SELECT o.sharing FROM profile_options AS o JOIN perfis AS p ON p.id = o.profile "
                                    "WHERE o.code_key = ? AND o.isolated = 1", (profile_id,)).fetchone()
+                if found and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='config'").fetchone():
+                    pinned = db.execute("SELECT valor FROM config WHERE chave=?", ("wpf_code_home_" + profile_id,)).fetchone()
+                    if pinned:
+                        if not isinstance(pinned[0], str):
+                            raise ValueError("Invalid Claude Code home in the profile catalog.")
+                        base = _local(pinned[0])
         except sqlite3.Error as exc:
             raise OSError(f"Cannot read profile catalog: {catalog}") from exc
         if found is None:

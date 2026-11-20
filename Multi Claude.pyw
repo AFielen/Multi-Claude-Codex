@@ -567,6 +567,7 @@ def db():
     con = sqlite3.connect(DB, timeout=5)
     try:
         con.execute("PRAGMA foreign_keys=ON")
+        prefs.require_claude_catalog(con)
         con.execute(
             "CREATE TABLE IF NOT EXISTS perfis ("
             "id INTEGER PRIMARY KEY, nome TEXT UNIQUE NOT NULL, pasta TEXT NOT NULL, "
@@ -610,6 +611,7 @@ def shortcut_target(args):
     if not caminho_sem_desvios(str(catalog)) or not catalog.is_file():
         raise FileNotFoundError("The original profile catalog could not be found.")
     with contextlib.closing(sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True)) as con:
+        prefs.require_claude_catalog(con, args[0])
         found = con.execute("SELECT 1 FROM profile_options JOIN perfis ON profile=id WHERE code_key=?",
                             (args[0],)).fetchone()
     if not found:
@@ -619,8 +621,15 @@ def shortcut_target(args):
     return args[0]
 
 
-def queue_shortcut(key, requested):
-    with db() as con:
+def queue_shortcut(key, requested, *, already_running=False):
+    catalog = Path(DB)
+    if not caminho_sem_desvios(str(catalog)):
+        raise OSError("Invalid profile catalog.")
+    # A running WPF manager can consume a Claude shortcut from a mixed catalog.
+    # Opening the queue alone must never initialize or migrate the catalog.
+    with contextlib.closing(sqlite3.connect(catalog.as_uri() + "?mode=rw", uri=True)) as con, con:
+        con.execute("BEGIN IMMEDIATE")
+        prefs.require_claude_catalog(con, key if already_running else None)
         con.execute("CREATE TABLE IF NOT EXISTS open_requests(code_key TEXT PRIMARY KEY, requested REAL)")
         con.execute("INSERT OR REPLACE INTO open_requests VALUES (?, ?)", (key, requested))
 
@@ -730,15 +739,25 @@ def pasta_protegida(pasta):
         return True
     loc = os.environ.get("LOCALAPPDATA")
     roam = os.environ.get("APPDATA")
-    raizes = [FOTOS, os.path.join(BASE, "claude-code"), os.path.join(BASE, "profile_shortcuts")]
-    if roam:
-        raizes.append(os.path.join(roam, "Claude"))
-    if loc:
-        raizes.extend(os.path.join(loc, nome) for nome in ("AnthropicClaude", "Claude", "Claude-Data"))
-        pacotes = identidade_pasta(os.path.join(loc, "Packages"))
-        if dentro_de(n, pacotes) and "claude" in os.path.relpath(n, pacotes).split(os.sep)[0].lower():
+    raizes = [FOTOS, os.path.join(BASE, "claude-code"), os.path.join(BASE, "profile_shortcuts"),
+              os.path.expanduser("~/.codex"), os.environ.get("CODEX_HOME")]
+    child = ""
+    for component in (Path(n), *Path(n).parents):
+        if component.name.lower() in ("codex-desktop", "codex-home") and (
+                re.fullmatch("[0-9a-f]{32}", child) or component.parent == Path(BASE)
+                or (component.parent / "perfis.db").is_file()):
             return True
-    return any(dentro_de(n, identidade_pasta(p)) for p in raizes)
+        child = component.name.lower()
+    if roam:
+        raizes.extend(os.path.join(roam, name) for name in ("Claude", "Codex", "ChatGPT", "OpenAI/Codex", "OpenAI/ChatGPT"))
+    if loc:
+        raizes.extend(os.path.join(loc, nome) for nome in ("AnthropicClaude", "Claude", "Claude-Data", "Codex", "ChatGPT", "OpenAI/Codex", "OpenAI/ChatGPT"))
+        pacotes = identidade_pasta(os.path.join(loc, "Packages"))
+        if dentro_de(n, pacotes):
+            package = os.path.relpath(n, pacotes).split(os.sep)[0].lower()
+            if any(name in package for name in ("claude", "codex", "chatgpt")):
+                return True
+    return any(dentro_de(n, path) or dentro_de(path, n) for path in map(identidade_pasta, raizes))
 
 
 def eh_perfil_claude(pasta):
@@ -860,7 +879,10 @@ def importar_banco(app, arquivo):
     with contextlib.closing(sqlite3.connect(Path(arquivo).absolute().as_uri() + "?mode=ro", uri=True)) as origem:
         colunas = [c[1] for c in origem.execute("PRAGMA table_info(perfis)")]
         fotos = "foto" if "foto" in colunas else "NULL"
-        linhas = origem.execute(f"SELECT nome, pasta, {fotos} FROM perfis").fetchall()
+        source = "perfis"
+        if prefs.has_provider(origem):
+            source += " LEFT JOIN profile_options ON profile=id WHERE profile IS NULL OR provider='claude'"
+        linhas = origem.execute(f"SELECT nome, pasta, {fotos} FROM {source}").fetchall()
     registradas = {identidade_pasta(p[2]) for p in app.perfis()}
     n = 0
     with db() as con:
@@ -3144,7 +3166,7 @@ def principal():
         if already_running:
             windows_profiles.allow_manager_foreground(BASE)
         try:
-            queue_shortcut(requested, time.time())
+            queue_shortcut(requested, time.time(), already_running=already_running)
         except (OSError, sqlite3.Error) as e:
             ctypes.windll.user32.MessageBoxW(None, str(e), APP, 0x30)
             return
@@ -3157,7 +3179,11 @@ def principal():
     except Exception:
         pass
     log(f"{APP} {VERSAO} aberto")
-    app = App()
+    try:
+        app = App()
+    except OSError as error:
+        ctypes.windll.user32.MessageBoxW(None, str(error), APP, 0x30)
+        return
     windows_profiles.mark_manager_window(app, BASE)
     app.after(250, app.check_shortcuts)
     app.report_callback_exception = lambda *e: log("ERRO: " + "".join(__import__("traceback").format_exception(*e)))

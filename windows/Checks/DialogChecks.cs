@@ -69,6 +69,57 @@ internal static class DialogChecks
         if (selectedName.Text != "Café Arbeit") throw new Exception("Cancelled search changed the selected profile.");
         SaveName(original);
         Console.WriteLine("PASS WPF editor save and search keyboard focus, accents, arrows, cancel");
+        CheckCodexProfiles(window);
+    }
+
+    private static void CheckCodexProfiles(MainWindow window)
+    {
+        T Node<T>(string id) => (T)window.FindName(id);
+        WithDialog(window, Node<Button>("NewProfile"), dialog =>
+        {
+            var provider = Find<ComboBox>(dialog, "ProfileProvider");
+            if (!provider.IsEnabled || provider.SelectedItem is not ProfileProvider.Claude)
+                throw new Exception("New profiles must default to Claude and allow choosing Codex.");
+            var isolated = Find<CheckBox>(dialog, "Option_isolated");
+            var sharing = Find<CheckBox>(dialog, "Option_share_on");
+            isolated.IsChecked = true;
+            sharing.IsChecked = true;
+            provider.SelectedItem = ProfileProvider.Codex;
+            if (isolated.IsVisible || sharing.IsVisible)
+                throw new Exception("Codex editor exposes Claude Code settings.");
+            Find<TextBox>(dialog, "ProfileName").Text = "QA Work";
+            Find<TextBox>(dialog, "ShortcutKeys").Clear();
+            Click(Find<Button>(dialog, "SaveProfile"));
+        });
+        var codexTab = Node<TabItem>("CodeTab");
+        if (Node<TextBlock>("SelectedName").Text != "QA Work" || !Equals(codexTab.Header, "Codex CLI") ||
+            Node<TabItem>("OverviewTab").Visibility != Visibility.Collapsed ||
+            Node<FrameworkElement>("CodeUsage").Visibility != Visibility.Collapsed ||
+            Node<Button>("SignIn").Visibility != Visibility.Collapsed || Node<Button>("SignOut").Visibility != Visibility.Collapsed ||
+            Node<Button>("CodeLogin").Visibility != Visibility.Visible)
+            throw new Exception("Codex workspace mixed Claude account or usage actions into its desktop/CLI controls.");
+        WithDialog(window, Node<Button>("EditProfile"), dialog =>
+        {
+            var provider = Find<ComboBox>(dialog, "ProfileProvider");
+            if (provider.IsEnabled || provider.SelectedItem is not ProfileProvider.Codex)
+                throw new Exception("Saved Codex profile did not retain its provider.");
+        });
+        WithDialog(window, Node<Button>("SwitchProfile"), dialog =>
+        {
+            Find<TextBox>(dialog, "ProfileSearch").Text = "codex work";
+            var results = Find<ListBox>(dialog, "ProfileResults");
+            if (results.Items.Count != 1 || results.SelectedItem is not ListBoxItem
+                { Tag: Profile { Name: "QA Work", Provider: ProfileProvider.Codex, Isolated: true, Sharing: false } })
+                throw new Exception("Provider search failed or saved Codex profile inherited Claude settings.");
+        });
+        window.Width = 920;
+        window.UpdateLayout();
+        var list = Node<ListBox>("ProfileList");
+        list.SelectedItem = list.Items.Cast<ListBoxItem>().First(item => item.Tag is Profile { Provider: ProfileProvider.Claude });
+        if (Node<TabItem>("OverviewTab").Visibility != Visibility.Visible || !Equals(codexTab.Header, "Claude Code") ||
+            Node<FrameworkElement>("CodeUsage").Visibility != Visibility.Visible)
+            throw new Exception("Switching back to Claude did not restore its profile controls.");
+        Console.WriteLine("PASS mixed-provider WPF creation, editing, search and account-specific controls");
     }
 
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

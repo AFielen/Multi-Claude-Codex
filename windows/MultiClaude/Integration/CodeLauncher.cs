@@ -48,7 +48,7 @@ internal static class CodeLauncher
         child.Environment["ANTHROPIC_CONFIG_DIR"] = Path.Combine(config, "anthropic");
     }
 
-    private static ProcessStartInfo PowerShell(string code)
+    internal static ProcessStartInfo PowerShell(string code)
     {
         var task = StartInfo(Shell);
         task.CreateNoWindow = true;
@@ -57,7 +57,7 @@ internal static class CodeLauncher
         return task;
     }
 
-    private static bool RunQuiet(ProcessStartInfo request, out string output)
+    internal static bool RunQuiet(ProcessStartInfo request, out string output)
     {
         request.RedirectStandardOutput = true;
         request.RedirectStandardError = true;
@@ -146,17 +146,23 @@ internal static class CodeLauncher
                 StoragePaths.RequireOrdinary(resolved);
                 var info = FileVersionInfo.GetVersionInfo(resolved);
                 if (info.ProductName is "Claude" or "Claude Desktop" || info.FileDescription == "Claude Desktop") continue;
-                var request = PowerShell("""
-                    $s=Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $env:MULTI_CLAUDE_SIGNATURE_PATH
-                    if ($s.Status -eq 'Valid' -and $s.SignerCertificate.GetNameInfo('SimpleName',$false) -eq 'Anthropic, PBC') { exit 0 }
-                    exit 1
-                    """);
-                request.Environment["MULTI_CLAUDE_SIGNATURE_PATH"] = resolved;
-                if (RunQuiet(request, out _)) return resolved;
+                if (SignedBy(resolved, "Anthropic, PBC")) return resolved;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { }
         }
         throw new FileNotFoundException("Die signierte Windows-Version von Claude Code wurde nicht gefunden. https://code.claude.com/docs/en/setup");
+    }
+
+    internal static bool SignedBy(string file, string publisher)
+    {
+        var request = PowerShell("""
+            $s=Microsoft.PowerShell.Security\Get-AuthenticodeSignature -LiteralPath $env:MULTI_CLAUDE_SIGNATURE_PATH
+            if ($s.Status -eq 'Valid' -and $s.SignerCertificate.GetNameInfo('SimpleName',$false) -eq $env:MULTI_CLAUDE_PUBLISHER) { exit 0 }
+            exit 1
+            """);
+        request.Environment["MULTI_CLAUDE_SIGNATURE_PATH"] = file;
+        request.Environment["MULTI_CLAUDE_PUBLISHER"] = publisher;
+        return RunQuiet(request, out _);
     }
 
     internal static string QuoteArg(string value)

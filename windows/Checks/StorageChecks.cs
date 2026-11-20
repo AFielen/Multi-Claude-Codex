@@ -48,9 +48,12 @@ internal static class StorageChecks
             Check(fixture.ExitCode == 0, "Python fixture generation failed.");
         }
 
+        Check(Catalog.FindInExisting(home, new string('a', 32))?.Provider == ProfileProvider.Claude,
+            "A pre-provider shortcut resolves read-only before migration");
         var catalog = new Catalog(home);
         var all = catalog.Profiles();
-        Check(all.Count == 2 && all[0].Id == 44 && all[1].Id == 17, "2.3.0 order/IDs");
+        Check(all.Count == 2 && all[0].Id == 44 && all[1].Id == 17 && all.All(p => p.Provider == ProfileProvider.Claude),
+            "2.3.0 order, IDs and Claude provider");
         Profile work = all[1];
         Check(work.CodeKey == new string('a', 32) && work.StoredPath == @"dados\Arbeit" &&
               work.DesktopPath == Path.Combine(home, "dados", "Arbeit") && work.Border && work.Tray && work.Isolated &&
@@ -111,6 +114,7 @@ internal static class StorageChecks
             old.Run("CREATE TABLE perfis(id INTEGER PRIMARY KEY, nome TEXT UNIQUE NOT NULL, pasta TEXT NOT NULL, criado TEXT DEFAULT CURRENT_TIMESTAMP)");
             old.Run("INSERT INTO perfis(id,nome,pasta) VALUES(73,'Old',?)", all[0].DesktopPath);
         }
+        Check(Catalog.FindInExisting(oldPath, work.CodeKey) == null, "Pre-options catalog has no shortcuts before migration");
         var migrated = new Catalog(oldPath);
         var oldProfile = migrated.Profiles().Single();
         Check(oldProfile.Id == 73 && !oldProfile.Isolated && oldProfile.Shortcut == "" && oldProfile.CodeKey.Length == 32 &&
@@ -192,5 +196,100 @@ internal static class StorageChecks
         redirected.Reset();
         Check(File.Exists(Path.Combine(managed.DesktopPath, "Local State")), "Reset keeps externally owned directory under a redirected data root");
         Directory.Delete(redirectedData);
+        Providers(root);
+    }
+
+    private static void Providers(string root)
+    {
+        var source = new Catalog(Path.Combine(root, "mixed providers"));
+        var claude = source.Save(source.Draft() with { Name = "Claude" });
+        Directory.CreateDirectory(claude.DesktopPath);
+        File.WriteAllText(Path.Combine(claude.DesktopPath, "config.json"), "{}");
+        File.WriteAllText(Path.Combine(claude.DesktopPath, "Local State"), "{}");
+        var codex = source.Save(source.Draft() with { Name = "Codex", Provider = ProfileProvider.Codex });
+        Check(codex.Isolated && !codex.Sharing && codex.DesktopPath == Path.Combine(source.Home, "codex-desktop", codex.CodeKey) &&
+            Catalog.FindInExisting(source.Home, codex.CodeKey) == codex, "Persistent Codex identity and shortcut");
+        Check(new Catalog(source.Home).Profiles().SequenceEqual(new[] { claude, codex }), "Mixed catalog survives restart");
+        source.ValidateDesktop(codex);
+        bool Rejected(Action operation)
+        {
+            try { operation(); return false; }
+            catch (Exception e) when (e is ArgumentException or IOException) { return true; }
+        }
+        Check(Rejected(() => source.Save(claude with { Provider = ProfileProvider.Codex })) &&
+              Rejected(() => source.Save(codex with { Provider = ProfileProvider.Claude })) &&
+              Rejected(() => source.Save(codex with { Sharing = true })) &&
+              Rejected(() => source.Save(codex with { Isolated = false })) &&
+              Rejected(() => source.Save(source.Draft() with { Name = "Unknown", Provider = (ProfileProvider)27 })),
+              "Provider is immutable and Codex always uses separate storage");
+
+        var merger = new Catalog(Path.Combine(root, "provider import"));
+        string database = Path.Combine(source.Home, "perfis.db");
+        Check(merger.ImportDatabase(database) == 2 && merger.ImportDatabase(database) == 0,
+            "Import supports mixed catalogs and unopened Codex profiles");
+        var imported = merger.Profiles().Single(p => p.Provider == ProfileProvider.Codex);
+        Check(imported.CodeHome == source.Home && imported.CodeKey == codex.CodeKey && imported.DesktopPath == codex.DesktopPath,
+            "Imported Codex registration retains both source locations");
+        merger.ValidateDesktop(imported);
+        Directory.CreateDirectory(codex.DesktopPath);
+        Check(!source.CanErase(codex), "Unmarked Codex data retained");
+        File.WriteAllText(Path.Combine(codex.DesktopPath, "Local State"), "{}");
+        File.WriteAllText(Path.Combine(codex.DesktopPath, "config.json"), "{}");
+        string codexHome = Directory.CreateDirectory(Path.Combine(source.Home, "codex-home", codex.CodeKey)).FullName;
+        File.WriteAllText(Path.Combine(codexHome, "Local State"), "{}");
+        File.WriteAllText(Path.Combine(codexHome, "config.json"), "{}");
+        var outsider = new Catalog(Path.Combine(root, "folder import"));
+        Check(outsider.ImportFolders([codex.DesktopPath, codexHome]) == 0 &&
+            outsider.Discover([codex.DesktopPath, codexHome]).Count == 0, "Claude discovery excludes managed Codex folders from every catalog");
+        Check(!merger.CanErase(imported) && source.CanErase(codex), "Only the owning catalog can erase a marked Codex desktop");
+        Check(Rejected(() => source.ValidateDesktop(codex with { DesktopPath = claude.DesktopPath })) &&
+              Rejected(() => source.ValidateDesktop(claude with { DesktopPath = codex.DesktopPath })),
+              "Provider paths cannot be used interchangeably");
+
+        using (var db = new Sqlite(database))
+        {
+            db.Run("UPDATE perfis SET pasta=? WHERE id=?", claude.StoredPath, codex.Id);
+            Check(Rejected(() => outsider.ImportDatabase(database)) && outsider.Profiles().Count == 0,
+                "Import rejects conflicting provider paths atomically");
+            db.Run("UPDATE perfis SET pasta=? WHERE id=?", codex.StoredPath, codex.Id);
+            db.Run("UPDATE profile_options SET provider='future' WHERE profile=?", codex.Id);
+            Check(Rejected(() => outsider.ImportDatabase(database)) && Rejected(() => Catalog.FindInExisting(source.Home, codex.CodeKey)),
+                "Unknown on-disk providers cannot launch or import as Claude");
+            db.Run("UPDATE profile_options SET provider='codex' WHERE profile=?", codex.Id);
+        }
+        string fakeRoaming = Path.Combine(root, "fake roaming");
+        string fakeUser = Path.Combine(root, "fake user");
+        string? previousRoaming = Environment.GetEnvironmentVariable("APPDATA");
+        string? previousUser = Environment.GetEnvironmentVariable("USERPROFILE");
+        string? previousCodex = Environment.GetEnvironmentVariable("CODEX_HOME");
+        try
+        {
+            Environment.SetEnvironmentVariable("APPDATA", fakeRoaming);
+            Environment.SetEnvironmentVariable("USERPROFILE", fakeUser);
+            string customHome = Path.Combine(fakeUser, "custom CLI");
+            Environment.SetEnvironmentVariable("CODEX_HOME", customHome);
+            foreach (string path in new[] { Path.Combine(fakeRoaming, "Codex"), Path.Combine(fakeRoaming, "ChatGPT"), Path.Combine(fakeUser, ".codex"), customHome })
+            {
+                string global = Directory.CreateDirectory(path).FullName;
+                File.WriteAllText(Path.Combine(global, "config.json"), "{}");
+                File.WriteAllText(Path.Combine(global, "Local State"), "{}");
+                Check(outsider.ImportFolders([global]) == 0 && Rejected(() => outsider.ValidateDesktop(claude with { DesktopPath = global })),
+                    "Global provider storage is excluded: " + path);
+                Check(Rejected(() => outsider.ValidateDesktop(codex with { CodeHome = global, DesktopPath = Path.Combine(global, "codex-desktop", codex.CodeKey) })),
+                    "Codex cannot use a managed-looking folder under global storage: " + path);
+            }
+            Environment.SetEnvironmentVariable("CODEX_HOME", codexHome);
+            source.ValidateDesktop(codex); // A copied command may run inside this profile's own terminal.
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("APPDATA", previousRoaming);
+            Environment.SetEnvironmentVariable("USERPROFILE", previousUser);
+            Environment.SetEnvironmentVariable("CODEX_HOME", previousCodex);
+        }
+        merger.Delete(imported, true);
+        Check(Directory.Exists(codex.DesktopPath), "Unregistering an imported Codex profile preserves files");
+        source.Delete(codex, true);
+        Check(!Directory.Exists(codex.DesktopPath) && Directory.Exists(codexHome), "Erase retains Codex home and removes only the owned desktop");
     }
 }
