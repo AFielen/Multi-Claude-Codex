@@ -1,5 +1,4 @@
 using MultiClaude;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -18,34 +17,29 @@ internal static class StorageChecks
         string root = Path.Combine(tempRoot, "storage suite");
         string home = Path.Combine(root, "catalog");
         Directory.CreateDirectory(home);
-        // Python supplies a real pre-existing SQLite catalog in the 2.3.0 schema.
-        string script = """
-            import sqlite3, sys, pathlib, os
-            home = pathlib.Path(sys.argv[1])
-            db = sqlite3.connect(home/'perfis.db')
-            db.executescript('''
-            CREATE TABLE perfis(id INTEGER PRIMARY KEY, nome TEXT UNIQUE NOT NULL, pasta TEXT NOT NULL, criado TEXT DEFAULT CURRENT_TIMESTAMP, foto TEXT);
-            CREATE TABLE config(chave TEXT PRIMARY KEY, valor TEXT);
-            CREATE TABLE profile_options(profile INTEGER PRIMARY KEY REFERENCES perfis(id) ON DELETE CASCADE, code_key TEXT UNIQUE NOT NULL, position INTEGER NOT NULL, color TEXT NOT NULL, shortcut TEXT NOT NULL, isolated INTEGER NOT NULL, border INTEGER NOT NULL DEFAULT 0, sharing INTEGER NOT NULL DEFAULT 0, last_open TEXT, tray INTEGER NOT NULL DEFAULT 0);
-            ''')
-            external = home.parent/'external Claude'
-            for d in [external, home/'dados'/'Arbeit']:
-                d.mkdir(parents=True)
-                (d/'Local State').write_text('{}')
-                (d/'config.json').write_text('{}')
-            db.executemany('INSERT INTO perfis(id,nome,pasta) VALUES (?,?,?)', [(17,'Arbeit',r'dados\Arbeit'),(44,'Privat',str(external))])
-            db.executemany('INSERT INTO profile_options VALUES(?,?,?,?,?,?,?,?,?,?)', [(17,'a'*32,5,'#336699','Ctrl+Alt+4',1,1,0,'1680000000',1),(44,'b'*32,2,'#ff7733','',0,0,0,None,0)])
-            db.executemany('INSERT INTO config VALUES(?,?)',[('tema','escuro'),('idioma','de'),('selected_code_key','a'*32),('future','untouched')])
-            info = os.stat(home/'dados'/'Arbeit')
-            db.execute("INSERT INTO config VALUES('apagar_perfil_17',?)",(f'{info.st_dev}:{info.st_ino}',))
-            db.commit()
-            """;
-        var python = new ProcessStartInfo { FileName = "python", UseShellExecute = false };
-        python.ArgumentList.Add("-c"); python.ArgumentList.Add(script); python.ArgumentList.Add(home);
-        using (var fixture = Process.Start(python)!)
+        string managedPath = Path.Combine(home, "dados", "Arbeit");
+        string externalPath = Path.Combine(root, "external Claude");
+        foreach (string path in new[] { managedPath, externalPath })
         {
-            fixture.WaitForExit();
-            Check(fixture.ExitCode == 0, "Python fixture generation failed.");
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "Local State"), "{}");
+            File.WriteAllText(Path.Combine(path, "config.json"), "{}");
+        }
+        using (var db = new Sqlite(Path.Combine(home, "perfis.db")))
+        {
+            LegacyCatalogFixture.CreateSchema(db);
+            string workKey = new string('a', 32);
+            db.Run("INSERT INTO perfis(id,nome,pasta) VALUES(17,'Arbeit',?), (44,'Privat',?)",
+                @"dados\Arbeit", externalPath);
+            db.Run("""
+                INSERT INTO profile_options VALUES
+                    (17,?,5,'#336699','Ctrl+Alt+4',1,1,0,'1680000000',1),
+                    (44,?,2,'#ff7733','',0,0,0,NULL,0)
+                """, workKey, new string('b', 32));
+            db.Run("""
+                INSERT INTO config VALUES ('tema','escuro'), ('idioma','de'), ('selected_code_key',?),
+                    ('future','untouched'), ('apagar_perfil_17',?)
+                """, workKey, LegacyCatalogFixture.DirectoryIdentity(managedPath));
         }
 
         Check(Catalog.FindInExisting(home, new string('a', 32))?.Provider == ProfileProvider.Claude,
@@ -129,13 +123,11 @@ internal static class StorageChecks
         string junction = Path.Combine(root, "mount");
         void CreateJunction(string source, string destination)
         {
-            var link = new ProcessStartInfo("python") { UseShellExecute = false };
-            link.ArgumentList.Add("-c"); link.ArgumentList.Add("import _winapi,sys;_winapi.CreateJunction(*sys.argv[1:])");
-            link.ArgumentList.Add(source);
-            link.ArgumentList.Add(destination);
-            using var process = Process.Start(link)!;
-            process.WaitForExit();
-            Check(process.ExitCode == 0, "Junction fixture");
+            var link = CodeLauncher.PowerShell(
+                "New-Item -ItemType Junction -Path $env:FIXTURE_JUNCTION -Target $env:FIXTURE_TARGET -ErrorAction Stop | Out-Null");
+            link.Environment["FIXTURE_JUNCTION"] = destination;
+            link.Environment["FIXTURE_TARGET"] = source;
+            Check(CodeLauncher.RunQuiet(link, out _), "Could not create test junction at " + destination);
         }
         CreateJunction(Path.GetDirectoryName(managed.DesktopPath)!, junction);
         using (var db = new Sqlite(Path.Combine(aliasCatalog.Home, "perfis.db")))

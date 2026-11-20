@@ -1,12 +1,12 @@
-> Based on Multi Claude, created by Richard KPL ([author](https://github.com/RichardKPL)). [Original Multi Claude repository](https://github.com/RichardKPL/multi-claude)
+> Based on Multi Claude, created by Richard KPL ([author](https://github.com/RichardKPL)). [Original Multi Claude repository](https://github.com/RichardKPL/multi-claude) · [Archived Python edition of this fork](https://github.com/AFielen/Multi-Claude-Codex/tree/archive/python-desktop)
 
 # MultiCloud Codex
 
-<img src="recursos/icone.png" width="96" align="right" alt="MultiCloud Codex">
+<img src="windows/MultiClaude/Resources/Manager.png" width="96" align="right" alt="MultiCloud Codex">
 
 Run work and personal accounts side by side on Windows. MultiCloud Codex gives each Codex or Claude Desktop profile its own sign-in and window. For a Codex profile, the desktop app and the native Windows CLI share the same account.
 
-Axel (AFielen) maintains this edition. [GitHub repository](https://github.com/AFielen/Multi-Claude-Codex) · [Windows guide (Deutsch)](windows/README.md)
+The Windows app is written in C# with .NET 10 and Windows Presentation Foundation (WPF). Axel (AFielen) maintains this edition. [GitHub repository](https://github.com/AFielen/Multi-Claude-Codex) · [Windows guide (Deutsch)](windows/README.md)
 
 ## Build and start on Windows
 

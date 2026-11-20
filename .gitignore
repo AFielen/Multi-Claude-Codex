@@ -10,8 +10,8 @@ claude-code/
 codex-desktop/
 codex-home/
 profile_shortcuts/
-# The ten bundled pictures are tracked. Other gallery files belong to the user.
-profile_pictures/*
+# Runtime gallery of the portable manager
+profile_pictures/
 
 # Build
 build/
