@@ -87,7 +87,8 @@ class DesktopLayoutTests(unittest.TestCase):
     def test_pending_login_fits_default_at_200_percent(self):
         with patch.object(self.module.App, "area_trabalho", return_value=(0, 0, 2560, 1440)):
             self.launch()
-        self.assertEqual(self.ui.winfo_width(), self.ui.px(640))
+        self.assertGreaterEqual(self.ui.winfo_width(), self.ui.px(720))
+        self.assertTrue(self.ui.sidebar.winfo_ismapped())
         for text in ("Multi Claude", "Abnahmeprofil", self.ui.t("aguard"), self.ui.t("colar"),
                      self.ui.t("cancelar"), self.module.ATRIBUICAO):
             self.assert_label_fits(text)

@@ -18,6 +18,8 @@ import tempfile
 RAIZ = Path(__file__).resolve().parents[1]
 EXE = "Multi Claude.exe"
 AVISOS_TERCEIROS = "THIRD-PARTY-NOTICES.txt"
+MODULOS = ("profile_code.py", "profile_settings.py", "profile_shortcut.py", "profile_text.py",
+           "profile_translations.py", "profile_tray.py", "profile_usage.py", "windows_profiles.py")
 # Arquivos de distribuição revisados. A galeria também aceita imagens particulares.
 RECURSOS_PADRAO = {
     "recursos/icone.ico": "0513afe73f9f85561ba1feb49b0b5ebd3250ad0afc26d000d0dcc4fb2d3a0350",
@@ -104,6 +106,8 @@ def main():
         (pasta / AVISOS_TERCEIROS).write_bytes(avisos_de_terceiros())
         fonte = pasta / "Multi Claude.pyw"
         shutil.copyfile(RAIZ / fonte.name, fonte)
+        for nome in MODULOS:
+            shutil.copyfile(RAIZ / nome, pasta / nome)
         v = re.search(r'^VERSAO = "([\d.]+)"', fonte.read_text(encoding="utf8"), re.M).group(1)
         args = [
             sys.executable, "-I", "-m", "PyInstaller", str(fonte),

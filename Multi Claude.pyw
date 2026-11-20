@@ -27,6 +27,7 @@ import ctypes.wintypes as wt
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import sqlite3
@@ -34,12 +35,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tkinter as tk
 import webbrowser
 import winreg
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import colorchooser, filedialog, ttk
+
+import profile_code
+import profile_settings as prefs
+import profile_usage
+import windows_profiles
+from profile_text import PROFILE_TEXT
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -47,7 +55,7 @@ except ImportError:  # sem Pillow: avatares só com a inicial
     Image = None
 
 APP = "Multi Claude"
-VERSAO = "2.1.0"
+VERSAO = "2.2.0"
 AUTOR = "Richard KPL"
 GITHUB = "https://github.com/RichardKPL"
 REPO = "https://github.com/RichardKPL/multi-claude"
@@ -513,6 +521,8 @@ _EXTRA = {
 }
 for _cod, _textos in _EXTRA.items():
     T[_cod].update(_textos)
+for _cod, _textos in PROFILE_TEXT.items():
+    T[_cod].update(_textos)
 
 for _cod, _aviso in {
     "pt": "As pastas vinculadas, compartilhadas ou não reconhecidas são preservadas.",
@@ -547,16 +557,16 @@ def db():
     os.makedirs(BASE, exist_ok=True)
     con = sqlite3.connect(DB, timeout=5)
     try:
+        con.execute("PRAGMA foreign_keys=ON")
         con.execute(
             "CREATE TABLE IF NOT EXISTS perfis ("
             "id INTEGER PRIMARY KEY, nome TEXT UNIQUE NOT NULL, pasta TEXT NOT NULL, "
             "criado TEXT DEFAULT CURRENT_TIMESTAMP)"
         )
         con.execute("CREATE TABLE IF NOT EXISTS config (chave TEXT PRIMARY KEY, valor TEXT)")
-        try:
+        if "foto" not in {row[1] for row in con.execute("PRAGMA table_info(perfis)")}:
             con.execute("ALTER TABLE perfis ADD COLUMN foto TEXT")
-        except sqlite3.OperationalError:
-            pass  # coluna já existe
+        prefs.migrate(con)
         yield con
         con.commit()
     except BaseException:
@@ -578,6 +588,46 @@ def cfg_set(chave, valor):
             con.execute("DELETE FROM config WHERE chave = ?", (chave,))
         else:
             con.execute("INSERT OR REPLACE INTO config VALUES (?, ?)", (chave, valor))
+
+
+def shortcut_target(args):
+    """Resolve a saved Windows shortcut against its original catalog before changing the app home."""
+    global BASE, DB, DADOS, FOTOS, LOG
+    if (len(args) != 3 or args[1] != "--manager-home" or not re.fullmatch("[a-f0-9]{32}", args[0])
+            or not caminho_local(args[2]) or ".." in Path(args[2]).parts):
+        raise ValueError("Invalid profile shortcut.")
+    folder = Path(args[2])
+    catalog = folder / "perfis.db"
+    if not caminho_sem_desvios(str(catalog)) or not catalog.is_file():
+        raise FileNotFoundError("The original profile catalog could not be found.")
+    with contextlib.closing(sqlite3.connect(catalog.as_uri() + "?mode=ro", uri=True)) as con:
+        found = con.execute("SELECT 1 FROM profile_options JOIN perfis ON profile=id WHERE code_key=?",
+                            (args[0],)).fetchone()
+    if not found:
+        raise ValueError("This profile shortcut no longer belongs to a registered profile.")
+    BASE, DB = str(folder), str(catalog)
+    DADOS, FOTOS, LOG = str(folder / "dados"), str(folder / "profile_pictures"), str(folder / "log.txt")
+    return args[0]
+
+
+def queue_shortcut(key, requested):
+    with db() as con:
+        con.execute("CREATE TABLE IF NOT EXISTS open_requests(code_key TEXT PRIMARY KEY, requested REAL)")
+        con.execute("INSERT OR REPLACE INTO open_requests VALUES (?, ?)", (key, requested))
+
+
+def next_shortcut_request():
+    with db() as con:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='open_requests'").fetchone():
+            return None
+        row = con.execute("SELECT code_key, requested FROM open_requests ORDER BY requested LIMIT 1").fetchone()
+        if row:
+            consumed = con.execute("DELETE FROM open_requests WHERE code_key=? AND requested=?", row)
+            if consumed.rowcount and isinstance(row[1], (int, float)) and 0 <= time.time() - row[1] < 60:
+                profile = con.execute("SELECT profile FROM profile_options WHERE code_key=?", (row[0],)).fetchone()
+                if profile:
+                    return profile[0]
+    return None
 
 
 _DISPOSITIVO = re.compile(r"(?:CON(?:IN\$|OUT\$)?|PRN|AUX|NUL|(?:COM|LPT)[0-9¹²³])(?:\.|$)", re.I)
@@ -671,7 +721,7 @@ def pasta_protegida(pasta):
         return True
     loc = os.environ.get("LOCALAPPDATA")
     roam = os.environ.get("APPDATA")
-    raizes = [FOTOS]
+    raizes = [FOTOS, os.path.join(BASE, "claude-code"), os.path.join(BASE, "profile_shortcuts")]
     if roam:
         raizes.append(os.path.join(roam, "Claude"))
     if loc:
@@ -877,15 +927,20 @@ def avatar(foto, tam, fundo):
     return foto_tk
 
 
-def desenhar_avatar(canvas, nome, foto, tam, fundo, indice):
+def desenhar_avatar(canvas, nome, foto, tam, fundo, indice, cor=None):
     canvas.delete("all")
     img = avatar(foto, tam, fundo)
     if img:
         canvas.create_image(tam // 2, tam // 2, image=img)
         canvas.imagem = img  # mantém referência
+        if cor:
+            canvas.create_oval(tam * .68, tam * .68, tam - 1, tam - 1, fill=cor, outline=fundo, width=2)
     else:
-        canvas.create_oval(1, 1, tam - 1, tam - 1, fill=AVATARES[indice % len(AVATARES)], width=0)
-        canvas.create_text(tam // 2, tam // 2, text=(nome.strip()[:1] or "?").upper(), fill="#ffffff",
+        cor = cor or AVATARES[indice % len(AVATARES)]
+        canvas.create_oval(1, 1, tam - 1, tam - 1, fill=cor, width=0)
+        rgb = [int(cor[n:n+2], 16) for n in (1, 3, 5)]
+        ink = "#171717" if sum(a*b for a,b in zip(rgb, (.299,.587,.114))) > 151 else "#ffffff"
+        canvas.create_text(tam // 2, tam // 2, text=(nome.strip()[:1] or "?").upper(), fill=ink,
                            font=(FONTE, int(tam * 0.36), "bold"))
 
 
@@ -913,13 +968,13 @@ def achar_claude():
     return None
 
 
-def abrir_claude(claude, pasta, url=None):
+def abrir_claude(claude, pasta, url=None, *, env=None):
     validar_pasta_para_abrir(pasta)
     os.makedirs(pasta, exist_ok=True)
     args = [claude, f"--user-data-dir={pasta}"]
     if url:
         args.append(url)
-    subprocess.Popen(args)
+    subprocess.Popen(args, env=env)
 
 
 def esta_logado(pasta):
@@ -1165,8 +1220,12 @@ class Botao(tk.Label):
         kw.setdefault("padx", 14)
         kw.setdefault("pady", 7)
         super().__init__(master, text=texto, bg=self.cor, fg=cores[2], font=(FONTE, tamanho, "bold"),
-                         cursor="hand2", **kw)
+                         cursor="hand2", takefocus=True, **kw)
         self.bind("<Button-1>", lambda e: cmd())
+        self.bind("<Return>", lambda e: cmd())
+        self.bind("<space>", lambda e: cmd())
+        self.bind("<FocusIn>", lambda e: self.config(relief="solid", bd=1))
+        self.bind("<FocusOut>", lambda e: self.config(relief="flat", bd=1))
         self.bind("<Enter>", lambda e: self.config(bg=self.hover))
         self.bind("<Leave>", lambda e: self.config(bg=self.cor))
 
@@ -1177,19 +1236,34 @@ class Rolavel(tk.Frame):
     def __init__(self, master, bg):
         super().__init__(master, bg=bg)
         self.tela = tk.Canvas(self, bg=bg, highlightthickness=0, bd=0)
-        self.tela.pack(fill="both", expand=True)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.tela.grid(row=0, column=0, sticky="nsew")
+        self.scroll = ttk.Scrollbar(self, orient="vertical", command=self.tela.yview)
+        def scroll_state(first, last):
+            if float(first) <= 0 and float(last) >= 1:
+                self.scroll.grid_remove()
+            else:
+                self.scroll.grid(row=0, column=1, sticky="ns")
+            self.scroll.set(first, last)
+        self.tela.config(yscrollcommand=scroll_state)
         self.dentro = tk.Frame(self.tela, bg=bg)
         self._janela = self.tela.create_window(0, 0, window=self.dentro, anchor="nw")
         self.dentro.bind("<Configure>", lambda e: self.tela.configure(scrollregion=self.tela.bbox("all")))
         self.tela.bind("<Configure>", lambda e: self.tela.itemconfigure(self._janela, width=e.width))
-        self.bind_all("<MouseWheel>", self._roda, add="+")
+        root = self._root()
+        if not getattr(root, "_scroll_binding", None):
+            root._scroll_binding = root.bind_all("<MouseWheel>", Rolavel._roda, add="+")
 
-    def _roda(self, e):
-        try:
-            if str(e.widget).startswith(str(self)) and self.dentro.winfo_height() > self.tela.winfo_height():
-                self.tela.yview_scroll(int(-e.delta / 120), "units")
-        except (tk.TclError, AttributeError):
-            pass
+    @staticmethod
+    def _roda(e):
+        widget = e.widget
+        while isinstance(widget, tk.Misc):
+            if isinstance(widget, Rolavel):
+                if widget.dentro.winfo_height() > widget.tela.winfo_height():
+                    widget.tela.yview_scroll(int(-e.delta / 120), "units")
+                break
+            widget = widget.master
 
 
 class Janela(tk.Toplevel):
@@ -1269,6 +1343,24 @@ class App(tk.Tk):
         self.login_timer = None
         self.estado = {}  # pasta -> (logado, aberto)
         self.layout = None  # (colunas, compacto) do último desenho
+        self.selected = None
+        self.options = {}
+        self.shortcuts = {}
+        self.shortcut_errors = {}
+        self.tray = None
+        self.tray_profiles = {}
+        self.tray_errors = set()
+        self.last_sidebar_click = None
+        self.hotkeys = windows_profiles.ProfileHotkeys(self, self.activate_id)
+        self.usage_cache = {}
+        self.usage_revision = 0
+        self.sizes = {}
+        self.limits = {}
+        self.scan_queue = queue.SimpleQueue()
+        self.scanning = False
+        self.scan_after = None
+        self.pending_open = {}
+        self.colored = {}
         self.primeira = cfg_get("idioma") is None
         self.lang = cfg_get("idioma") or idioma_do_windows()
         if self.lang not in T:
@@ -1331,7 +1423,7 @@ class App(tk.Tk):
         janela.geometry(f"{w}x{h}+{x}+{y}")
 
     def restaurar_geometria(self, valor):
-        w, h = self.px(640), self.px(680)
+        w, h = self.px(940), self.px(720)
         x, y = self.px(40), self.px(40)
         m = re.fullmatch(r"(\d{1,6})x(\d{1,6})(?:([+-]-?\d{1,7})([+-]-?\d{1,7}))?", valor or "")
         if m:
@@ -1417,23 +1509,27 @@ class App(tk.Tk):
                 link.pack_configure(side="right" if lado == "left" else "top")
         rodape.bind("<Configure>", dispor_rodape)
 
-        self.corpo = Rolavel(self, C["BG"])
-        self.corpo.pack(fill="both", expand=True, padx=(22, 16), pady=14)
-        self.area = self.corpo.dentro
-        self.corpo.tela.bind("<Configure>", self._ao_redimensionar, add="+")
+        self.corpo = tk.Frame(self, bg=C["BG"])
+        self.corpo.pack(fill="both", expand=True, padx=12, pady=12)
+        self.corpo.columnconfigure(1, weight=1)
+        self.corpo.rowconfigure(1, weight=1)
+        self.sidebar = Rolavel(self.corpo, C["PAINEL"])
+        self.detail = Rolavel(self.corpo, C["BG"])
+        self.picker = tk.Frame(self.corpo, bg=C["PAINEL"])
+        self.area = self.detail.dentro
+        self.corpo.bind("<Configure>", self._ao_redimensionar)
 
         self.recarregar()
         if self.login_perfil:
             self.mostrar_status(self.t("aguardando", n=self.login_perfil[1]), True)
 
     def _layout_para(self, largura):
-        colunas = 2 if largura >= self.px(860) else 1
-        compacto = largura / colunas < self.px(560)
-        return colunas, compacto
+        return (2, False) if largura >= self.px(720) else (1, True)
 
     def _ao_redimensionar(self, e):
         if self._layout_para(e.width) != self.layout:
-            self.after_idle(self.recarregar)
+            self.layout = self._layout_para(e.width)
+            self.recarregar()
 
     # ----- configurações -----
     def configuracoes(self):
@@ -1680,6 +1776,8 @@ class App(tk.Tk):
     def apagar_tudo(self):
         palavra = self.t("palavra")
         msg = self.t("pastas_preservadas") + "\n\n" + self.t("apagar_confirma", p=palavra)
+        if os.path.isdir(os.path.join(BASE, "claude-code")):
+            msg += "\n\n" + self.t("hold_code") + "\n" + os.path.join(BASE, "claude-code")
         resp = dialogo(self, self.t("apagar_tudo"), msg, entrada="",
                        botoes=[(self.t("apagar_tudo"), True, "primario"), (self.t("cancelar"), None, "normal")])
         if (resp or "").strip().upper() != palavra.upper():
@@ -1739,6 +1837,7 @@ class App(tk.Tk):
             validar_pasta_para_abrir(pasta)
         cur = con.execute("INSERT INTO perfis (nome, pasta, foto) VALUES (?, ?, ?)",
                           (nome, caminho_salvo(pasta), foto))
+        prefs.add(con, cur.lastrowid)
         return cur.lastrowid
 
     def nome_livre(self, con, nome):
@@ -1749,7 +1848,8 @@ class App(tk.Tk):
 
     def perfis(self):
         with db() as con:
-            linhas = con.execute("SELECT id, nome, pasta, foto FROM perfis ORDER BY id").fetchall()
+            linhas = con.execute("SELECT id, nome, pasta, foto FROM perfis JOIN profile_options ON profile=id "
+                                 "ORDER BY position, id").fetchall()
         return [(i, n, caminho_real(p), f) for i, n, p, f in linhas]
 
     def calcular_estado(self):
@@ -1757,7 +1857,21 @@ class App(tk.Tk):
         if not perfis:
             return {}
         abertos = claudes_abertos()
+        self.apply_borders(perfis, abertos)
         return {p[2]: (esta_logado(p[2]), normalizar(p[2]) in abertos) for p in perfis}
+
+    def apply_borders(self, profiles, running):
+        desired = {}
+        for p in profiles:
+            pid = running.get(normalizar(p[2]))
+            opt = self.options.get(p[0])
+            if pid and opt and opt.border:
+                if windows_profiles.set_profile_border([pid], opt.color):
+                    desired[(normalizar(p[2]), pid)] = opt.color
+        for path, pid in self.colored.keys() - desired.keys():
+            if running.get(path) == pid:
+                windows_profiles.set_profile_border([pid], None)
+        self.colored = desired
 
     def atualizar_estado(self):
         try:
@@ -1774,109 +1888,522 @@ class App(tk.Tk):
             log(f"erro ao atualizar estado: {e}")
         self.after(2000, self.atualizar_estado)
 
+    def check_shortcuts(self):
+        try:
+            request = next_shortcut_request()
+            if request is not None:
+                self.activate_id(request)
+        except (sqlite3.Error, OSError, ValueError) as e:
+            log(f"Profile shortcut: {e}")
+        self.after(750, self.check_shortcuts)
+
     def recarregar(self):
-        for w in self.area.winfo_children():
-            w.destroy()
-        largura = self.corpo.tela.winfo_width()
-        self.layout = self._layout_para(largura if largura > 1 else 600)
-        colunas, compacto = self.layout
-        for col in range(2):
-            self.area.columnconfigure(col, weight=1 if col < colunas else 0, uniform="c" if col < colunas else "")
-        perfis = self.perfis()
-        if not perfis:
-            vazio = tk.Frame(self.area, bg=C["BG"])
-            vazio.grid(row=0, column=0, columnspan=colunas, pady=60)
-            tk.Label(vazio, text="✳", bg=C["BG"], fg=C["ACCENT"], font=(FONTE, 40)).pack()
-            tk.Label(vazio, text=self.t("nenhum"), bg=C["BG"], fg=C["TEXTO"], font=(FONTE, 13, "bold")).pack()
-            tk.Label(vazio, text=self.t("nenhum_sub"), bg=C["BG"], fg=C["SUB"], font=(FONTE, 10)).pack(pady=(2, 14))
-            Botao(vazio, "+  " + self.t("novo"), self.novo, tipo="primario").pack(fill="x")
-            Botao(vazio, "⇩  " + self.t("importar"), self.importar, tipo="fantasma").pack(fill="x", pady=(6, 0))
-        for i, p in enumerate(perfis):
-            card = self._card(p, i, compacto)
-            col = i % colunas
-            card.grid(row=i // colunas, column=col, sticky="nsew", pady=6,
-                      padx=(0, 6) if colunas == 2 and col == 0 else (6, 0) if colunas == 2 else 0)
-
-    def _chip(self, master, texto, cor):
-        f = tk.Frame(master, bg=C["CHIP"])
-        tk.Label(f, text="●", bg=C["CHIP"], fg=cor, font=(FONTE, 8)).pack(side="left", padx=(8, 4), pady=2)
-        tk.Label(f, text=texto, bg=C["CHIP"], fg=C["TEXTO"], font=(FONTE, 9)).pack(side="left", padx=(0, 9), pady=2)
-        return f
-
-    def _card(self, p, i, compacto):
-        _, nome, pasta, foto = p
-        logado, aberto = self.estado.get(pasta, (False, False))
-        esperando = bool(self.login_perfil and self.login_perfil[2] == pasta)
-
-        c = tk.Frame(self.area, bg=C["CARD"], highlightthickness=1,
-                     highlightbackground=C["ACCENT"] if esperando else C["BORDA"])
-        c.columnconfigure(1, weight=1)
-
-        av = tk.Canvas(c, width=52, height=52, bg=C["CARD"], highlightthickness=0, cursor="hand2")
-        desenhar_avatar(av, nome, foto, 52, C["CARD"], i)
-        av.grid(row=0, column=0, rowspan=2, padx=(16, 12), pady=14)
-        av.bind("<Button-1>", lambda e: self.escolher_foto(p))
-
-        titulo = tk.Label(c, text=nome, bg=C["CARD"], fg=C["TEXTO"], font=(FONTE, 12, "bold"),
-                          cursor="xterm", anchor="w")
-        titulo.grid(row=0, column=1, sticky="sew", pady=(14, 0))
-        titulo.bind("<Configure>", lambda e: titulo.config(wraplength=max(1, e.width - 4)))
-        titulo.bind("<Double-Button-1>", lambda e: self.renomear(p))
-        chips = tk.Frame(c, bg=C["CARD"])
-        chips.grid(row=1, column=1, sticky="nw", pady=(4, 14))
-        if esperando:
-            self._chip(chips, self.t("aguard"), C["AMARELO"]).pack(side="left")
+        profiles = self.perfis()
+        with db() as con:
+            self.options = prefs.all_settings(con)
+        self.sync_shortcuts()
+        self.sync_tray(profiles)
+        if self.selected not in self.options:
+            saved = cfg_get("selected_code_key")
+            self.selected = next((i for i, opt in self.options.items() if opt.key == saved),
+                                 profiles[0][0] if profiles else None)
+        if self.layout is None:
+            self.layout = self._layout_para(self.corpo.winfo_width())
+        for parent in (self.sidebar.dentro, self.picker, self.area):
+            for child in parent.winfo_children():
+                child.destroy()
+        self.sidebar.grid_remove()
+        self.picker.grid_remove()
+        self.detail.grid(row=1, column=1, sticky="nsew")
+        if not profiles:
+            self.corpo.columnconfigure(0, minsize=0)
+            self.heading(self.area, self.t("nenhum")).pack(pady=(40, 8))
+            self.note(self.area, self.t("nenhum_sub")).pack()
+            Botao(self.area, self.t("novo"), self.novo, tipo="primario").pack(pady=10)
+            Botao(self.area, self.t("importar"), self.importar).pack()
+            return
+        current = next(p for p in profiles if p[0] == self.selected)
+        self.selected_path = current[2]
+        if self.layout[0] == 2:
+            width = self.px(204)
+            self.corpo.columnconfigure(0, minsize=width)
+            self.sidebar.tela.config(width=width)
+            self.sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 10))
+            self.heading(self.sidebar.dentro, self.t("profiles"), 11).pack(fill="x", padx=12, pady=12)
+            self.sidebar_rows = {}
+            for p in profiles:
+                self.sidebar_row(p)
         else:
-            self._chip(chips, self.t("conectado" if logado else "desconectado"),
-                       C["VERDE"] if logado else C["SUB"]).pack(side="left", padx=(0, 6))
-            self._chip(chips, self.t("aberto" if aberto else "fechado"),
-                       C["VERDE"] if aberto else C["SUB"]).pack(side="left")
+            self.corpo.columnconfigure(0, minsize=0)
+            self.picker.grid(row=0, column=1, sticky="ew", pady=(0, 4))
+            choose = tk.Menubutton(self.picker, text=self.t("profiles") + "   ▾", takefocus=True,
+                                   bg=C["PAINEL"], fg=C["TEXTO"], font=(FONTE, 10, "bold"), padx=10, pady=4)
+            menu = tk.Menu(choose, tearoff=0)
+            for p in profiles:
+                menu.add_command(label=p[1], command=lambda i=p[0]: self.select_profile(i))
+            choose.config(menu=menu)
+            choose.pack(side="left")
+            self.reorder_buttons(self.picker, current, compact=True)
+        self.draw_detail(current)
+        if self.scan_after is None:
+            self.scan_after = self.after(80, self.poll_usage)
 
-        botoes = tk.Frame(c, bg=C["CARD"])
-        if compacto:
-            botoes.grid(row=2, column=0, columnspan=3, sticky="ew", padx=16, pady=(0, 14))
-        else:
-            botoes.grid(row=0, column=2, rowspan=2, padx=(8, 14))
-        mais = Botao(botoes, "⋯", lambda: self.menu(p, mais, logado), tipo="fantasma", tamanho=12, padx=10, pady=3)
-        mais.pack(side="right")
-        acoes = []
+    def sync_shortcuts(self):
+        current = {i: opt.shortcut for i, opt in self.options.items()}
+        for i, old in list(self.shortcuts.items()):
+            if current.get(i) != old:
+                self.hotkeys.set(i, "")
+                self.shortcuts.pop(i)
+                self.shortcut_errors.pop(i, None)
+        for i, shortcut in current.items():
+            if shortcut and i not in self.shortcuts:
+                try:
+                    self.hotkeys.set(i, shortcut)
+                except (OSError, ValueError):
+                    self.shortcut_errors[i] = shortcut
+                self.shortcuts[i] = shortcut
+
+    def sync_tray(self, profiles):
+        desired = {p[0]: (p[1], self.options[p[0]].color) for p in profiles if self.options[p[0]].tray}
+        if desired and self.tray is None:
+            import profile_tray
+            self.tray = profile_tray.ProfileTray(self, self.activate_id)
+        for i in self.tray_profiles.keys() - desired.keys():
+            self.tray.set(i, "", "", False)
+            self.tray_errors.discard(i)
+        for i, (name, color) in desired.items():
+            if self.tray_profiles.get(i) != (name, color) or i in self.tray_errors:
+                try:
+                    self.tray.set(i, name, color, True)
+                    self.tray_errors.discard(i)
+                except (OSError, ValueError):
+                    self.tray_errors.add(i)
+        self.tray_profiles = desired
+
+    def heading(self, parent, text, size=13):
+        return tk.Label(parent, text=text, bg=parent["bg"], fg=C["TEXTO"],
+                        font=(FONTE, size, "bold"), anchor="w", justify="left")
+
+    def note(self, parent, text, *, color=None):
+        label = tk.Label(parent, text=text, bg=parent["bg"], fg=color or C["SUB"], font=(FONTE, 9),
+                         anchor="w", justify="left", wraplength=self.px(330))
+        label.bind("<Configure>", lambda e: label.config(wraplength=max(1, e.width - 4)))
+        return label
+
+    def select_profile(self, identifier):
+        if identifier not in self.options or identifier == self.selected:
+            return
+        self.selected = identifier
+        cfg_set("selected_code_key", self.options[identifier].key)
+        self.detail.tela.yview_moveto(0)
+        self.recarregar()
+
+    def activate_id(self, identifier):
+        p = next((p for p in self.perfis() if p[0] == identifier), None)
+        if p:
+            self.select_profile(identifier)
+            self.abrir(p)
+
+    def sidebar_row(self, p):
+        identifier, name, path, photo = p
+        opt = self.options[identifier]
+        selected = identifier == self.selected
+        bg = C["BTN"] if selected else C["PAINEL"]
+        row = tk.Frame(self.sidebar.dentro, bg=bg, cursor="hand2", takefocus=True)
+        row.pack(fill="x", padx=4, pady=1)
+        self.sidebar_rows[identifier] = row
+        row.columnconfigure(2, weight=1)
+        tk.Frame(row, bg=opt.color if selected else bg, width=3).grid(row=0, column=0, rowspan=2, sticky="ns")
+        size = self.px(32)
+        avatar_view = tk.Canvas(row, bg=bg, width=size, height=size, highlightthickness=0)
+        desenhar_avatar(avatar_view, name, photo, size, bg, 0, opt.color)
+        avatar_view.grid(row=0, column=1, rowspan=2, padx=8, pady=8)
+        name_label = tk.Label(row, text=name, bg=bg, fg=C["TEXTO"], anchor="w", width=1, font=(FONTE, 10, "bold"))
+        name_label.grid(row=0, column=2, sticky="sew")
+        active = self.estado.get(path, (False, False))[1]
+        caption = self.t("aberto" if active else "fechado")
+        hotkey = opt.shortcut if identifier not in self.shortcut_errors else ""
+        summary = self.limits.get(opt.key, {}) if opt.isolated else {}
+        warning = max((value["used_percentage"] for _, value in self.live_windows(summary)), default=0)
+        caption += f"  ·  {warning:g}%" if warning > 80 else ("  ·  " + hotkey if hotkey else "")
+        status = tk.Label(row, text=caption, bg=bg, fg=C["AMARELO"] if warning > 80 else
+                          C["VERDE"] if active else C["SUB"], font=(FONTE, 8), anchor="w", width=1)
+        status.grid(row=1, column=2, sticky="new")
+        def drop(event):
+            target = next((i for i, r in self.sidebar_rows.items()
+                           if r.winfo_rooty() <= event.y_root < r.winfo_rooty() + r.winfo_height()
+                           and r.winfo_rootx() <= event.x_root < r.winfo_rootx() + r.winfo_width()), None)
+            if target is not None and target != identifier:
+                self.last_sidebar_click = None
+                self.move_profile(identifier, target)
+            elif target == identifier:
+                previous = self.last_sidebar_click
+                now = time.monotonic()
+                self.last_sidebar_click = (identifier, now)
+                self.select_profile(identifier)
+                if (previous and previous[0] == identifier and
+                        (now - previous[1]) * 1000 <= ctypes.windll.user32.GetDoubleClickTime()):
+                    self.last_sidebar_click = None
+                    self.activate_id(identifier)
+        for child in [row, *row.winfo_children()]:
+            child.bind("<ButtonRelease-1>", drop)
+        row.bind("<Return>", lambda e: self.activate_id(identifier))
+        row.bind("<space>", lambda e: self.select_profile(identifier))
+        for key, delta in (("Up", -1), ("Down", 1)):
+            row.bind("<Alt-" + key + ">", lambda e, d=delta: self.move_by(identifier, d))
+
+    def move_by(self, identifier, delta):
+        order = list(self.options)
+        if identifier in order and 0 <= order.index(identifier) + delta < len(order):
+            self.move_profile(identifier, order[order.index(identifier) + delta])
+
+    def move_profile(self, identifier, target):
+        with db() as con:
+            prefs.move(con, identifier, target)
+        self.selected = identifier
+        cfg_set("selected_code_key", self.options[identifier].key)
+        self.recarregar()
+
+    def reorder_buttons(self, parent, p, compact=False):
+        for delta, glyph, key in ((-1, "↑", "up"), (1, "↓", "down")):
+            if 0 <= list(self.options).index(p[0]) + delta < len(self.options):
+                label = glyph if compact else glyph + "  " + self.t(key)
+                Botao(parent, label, lambda d=delta: self.move_by(p[0], d), tipo="fantasma",
+                      tamanho=9, padx=7, pady=3).pack(side="left", padx=2)
+
+    def action_group(self, parent, actions):
+        group = tk.Frame(parent, bg=parent["bg"])
+        group.pack(fill="x", pady=(5, 4))
+        buttons = [Botao(group, label, fn, tipo=style, tamanho=9, padx=9, pady=5)
+                   for label, fn, style in actions]
+        # Use independent rows so variable button widths wrap without cross-row column sizing.
+        def flow(event):
+            x = y = height = 0
+            for button in buttons:
+                w, h = button.winfo_reqwidth(), button.winfo_reqheight()
+                if x and x + w > event.width:
+                    x, y, height = 0, y + height + 4, 0
+                button.place(x=x, y=y)
+                x += w + 5
+                height = max(h, height)
+            group.configure(height=y + height)
+        group.bind("<Configure>", flow)
+
+    def section(self, parent, title):
+        block = tk.Frame(parent, bg=C["CARD"])
+        block.pack(fill="x", padx=4, pady=(2, 7))
+        inside = tk.Frame(block, bg=C["CARD"])
+        inside.pack(fill="x", padx=12, pady=10)
+        if title is not None:
+            self.heading(inside, title, 11).pack(fill="x")
+        return inside
+
+    def draw_detail(self, p):
+        identifier, name, path, photo = p
+        opt = self.options[identifier]
+        logado, aberto = self.estado.get(path, (False, False))
+        top = self.section(self.area, None)
+        badge = tk.Frame(top, bg=top["bg"])
+        badge.pack(fill="x")
+        size = self.px(44)
+        av = tk.Canvas(badge, bg=badge["bg"], width=size, height=size, highlightthickness=0)
+        desenhar_avatar(av, name, photo, size, badge["bg"], 0, opt.color)
+        av.pack(side="left", padx=(0, 10))
+        identity = tk.Frame(badge, bg=badge["bg"])
+        identity.pack(side="left", expand=True, fill="x")
+        title = self.heading(identity, name, 16)
+        title.pack(fill="x")
+        title.bind("<Configure>", lambda e: title.config(wraplength=max(1, e.width - 4)))
+        state = tk.Frame(identity, bg=identity["bg"])
+        state.pack(fill="x")
+        waiting = self.login_perfil and self.login_perfil[0] == identifier
+        self.note(state, self.t("aguard" if waiting else "conectado" if logado else "desconectado")).pack(side="left")
+        self.note(state, self.t("aberto" if aberto else "fechado"), color=C["VERDE"] if aberto else C["SUB"]).pack(side="left", padx=7)
+        actions = [(self.t("switch" if aberto else "abrir"), lambda: self.abrir(p), "primario")]
         if not logado:
-            acoes.append((self.t("entrar"), lambda: self.login(p), "primario"))
-            if aberto:
-                acoes.append((self.t("fechar"), lambda: self.fechar_perfil(p), "normal"))
-        elif aberto:
-            acoes.append((self.t("fechar"), lambda: self.fechar_perfil(p), "normal"))
-        else:
-            acoes.append((self.t("abrir"), lambda: self.abrir(p), "primario"))
-        for texto, cmd, tipo in acoes:
-            Botao(botoes, texto, cmd, tipo=tipo).pack(side="left" if compacto else "right",
-                                                       padx=(0, 6) if compacto else (0, 6))
-        return c
+            actions.append((self.t("entrar"), lambda: self.login(p), "normal"))
+        if aberto:
+            actions.append((self.t("fechar"), lambda: self.fechar_perfil(p), "normal"))
+        actions.append((self.t("edit_profile"), lambda: self.edit_profile(p), "normal"))
+        self.action_group(top, actions)
 
-    def menu(self, p, widget, logado):
-        m = tk.Menu(self, tearoff=0, bg=C["MENU"], fg=C["TEXTO"], activebackground=C["ACCENT"],
-                    activeforeground="#ffffff", font=(FONTE, 10), bd=0, relief="flat")
-        m.add_command(label="  " + self.t("foto"), command=lambda: self.escolher_foto(p))
-        m.add_command(label="  " + self.t("renomear"), command=lambda: self.renomear(p))
-        m.add_command(label="  " + self.t("pasta"), command=lambda: self.pasta(p))
+        code = self.section(self.area, self.t("code_settings"))
+        self.note(code, self.t("isolated" if opt.isolated else "shared")).pack(fill="x")
+        if opt.isolated and opt.sharing:
+            self.note(code, self.t("shared_items") + " · " + self.t("share_items")).pack(fill="x")
+        code_actions = [(self.t("terminal"), lambda: self.code_action(p), "normal"),
+                        (self.t("copy_command"), lambda: self.code_action(p, copy=True), "fantasma")]
+        if opt.isolated:
+            code_actions.append((self.t("entrar"), lambda: self.code_action(p, login=True), "fantasma"))
+        self.action_group(code, code_actions)
+
+        self.usage_area = self.section(self.area, self.t("usage"))
+        self.draw_usage(p)
+        info = self.section(self.area, self.t("pasta"))
+        self.note(info, path).pack(fill="x")
+        stamp = lambda date: self.local_time(date) if date else "—"
+        with db() as con:
+            created = con.execute("SELECT strftime('%s', criado) FROM perfis WHERE id=?", (identifier,)).fetchone()
+        self.note(info, self.t("created") + "  " + stamp(created[0] if created else None)).pack(fill="x")
+        if opt.key in self.sizes:
+            amount, partial = self.sizes[opt.key]
+            if amount is not None:
+                unit = "GiB" if amount >= 1024**3 else "MiB"
+                value = amount / (1024**3 if unit == "GiB" else 1024**2)
+                self.note(info, self.t("folder_size") + f"  {'≥ ' if partial else ''}{value:.1f} {unit}").pack(fill="x")
+        self.note(info, self.t("last_open") + "  " + stamp(opt.last_open)).pack(fill="x")
+        shortcut = opt.shortcut or "—"
+        if identifier in self.shortcut_errors:
+            shortcut += " · " + self.t("hotkey_busy")
+        self.note(info, self.t("hotkey") + "  " + shortcut).pack(fill="x")
+        if identifier in self.tray_errors:
+            self.note(info, self.t("tray") + " · " + self.t("unavailable")).pack(fill="x")
+        self.action_group(info, [(self.t("explorer"), lambda: self.pasta(p), "normal"),
+                                 (self.t("save_link"), lambda: self.save_windows_shortcut(p), "fantasma")])
+        if self.layout[0] == 2:
+            order = tk.Frame(info, bg=info["bg"])
+            order.pack(fill="x")
+            self.reorder_buttons(order, p)
+        more = [(self.t("excluir"), lambda: self.excluir(p), "fantasma")]
         if logado:
-            m.add_command(label="  " + self.t("sair"), command=lambda: self.sair(p))
-        m.add_separator()
-        m.add_command(label="  " + self.t("excluir"), command=lambda: self.excluir(p), foreground=C["VERMELHO"])
-        m.tk_popup(widget.winfo_rootx(), widget.winfo_rooty() + widget.winfo_height())
+            more.insert(0, (self.t("sair"), lambda: self.sair(p), "fantasma"))
+        self.action_group(info, more)
+
+    @staticmethod
+    def local_time(value):
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(value)))
+        except (OSError, ValueError, OverflowError, TypeError):
+            return "—"
+
+    @staticmethod
+    def live_windows(data):
+        for key in ("five_hour", "seven_day"):
+            limit = data.get(key)
+            if limit and limit["resets_at"] > time.time():
+                yield key, limit
+
+    def draw_usage(self, p):
+        area = self.usage_area
+        opt = self.options[p[0]]
+        if not opt.isolated:
+            self.note(area, self.t("shared_usage")).pack(fill="x")
+            return
+        data = self.usage_cache.get(opt.key)
+        if data is None:
+            self.note(area, self.t("loading")).pack(fill="x")
+            return
+        _, tokens, capture = data
+        columns = tk.Frame(area, bg=area["bg"])
+        columns.pack(fill="x", pady=(7, 2))
+        usage = tk.Frame(columns, bg=columns["bg"])
+        quota = tk.Frame(columns, bg=columns["bg"])
+        if self.layout and self.layout[0] == 2:
+            for index, block in enumerate((usage, quota)):
+                columns.columnconfigure(index, weight=1, uniform="usage")
+                block.grid(row=0, column=index, sticky="new", padx=(0, 10) if not index else 0)
+        else:
+            usage.pack(fill="x")
+            quota.pack(fill="x", pady=(8, 0))
+        self.heading(usage, self.t("code_tokens"), 10).pack(fill="x")
+        if tokens and tokens.available:
+            total = format(tokens.total_tokens, ",").replace(",", " ")
+            self.heading(usage, total, 14).pack(anchor="w")
+            for key, value in (("tokens_in", tokens.input_tokens), ("tokens_out", tokens.output_tokens),
+                               ("cache_read", tokens.cache_read_tokens), ("cache_write", tokens.cache_write_tokens)):
+                self.note(usage, self.t(key) + "   " + format(value, ",").replace(",", " ")).pack(fill="x")
+            self.note(usage, self.t("sample_count", n=tokens.requests)).pack(fill="x")
+        else:
+            self.note(usage, self.t("no_usage" if tokens is not None else "usage_error")).pack(fill="x")
+        if tokens and tokens.incomplete:
+            self.note(usage, self.t("partial")).pack(fill="x")
+        self.heading(quota, self.t("quotas"), 10).pack(fill="x")
+        limits = self.limits.get(opt.key, {})
+        windows = list(self.live_windows(limits))
+        if windows:
+            age = time.time() - limits["observed_at"]
+            for key, window in windows:
+                used = window["used_percentage"]
+                self.note(quota, self.t(key) + f"   {used:g}%   ·   " +
+                          self.t("reset_at", time=self.local_time(window["resets_at"])),
+                          color=C["SUB"] if age > 900 else C["TEXTO"]).pack(fill="x")
+                bar = tk.Canvas(quota, height=self.px(4), width=1, bg=C["BTN"], highlightthickness=0)
+                bar.pack(fill="x", pady=(1, 4))
+                band = C["SUB"] if age > 900 else C["AMARELO"] if used > 80 else opt.color
+                def paint(event, canvas=bar, percent=used, color=band):
+                    canvas.delete("all")
+                    canvas.create_rectangle(0, 0, event.width * percent / 100, event.height, fill=color, outline="")
+                bar.bind("<Configure>", paint)
+            self.note(quota, self.t("observed", time=self.local_time(limits["observed_at"])) +
+                      (" · " + self.t("stale") if age > 900 else "")).pack(fill="x")
+        else:
+            self.note(quota, self.t("no_limits")).pack(fill="x")
+        self.action_group(area, [(self.t("capture_off" if capture else "capture_on"),
+                                  lambda: self.toggle_capture(p, not capture), "normal"),
+                                 (self.t("refresh"), lambda: self.refresh_usage(p), "fantasma")])
+
+    def refresh_usage(self, p):
+        self.usage_revision += 1
+        self.sizes.pop(self.options[p[0]].key, None)
+        self.usage_cache.pop(self.options[p[0]].key, None)
+        self.recarregar()
+
+    def poll_usage(self):
+        self.scan_after = None
+        try:
+            revision, key, tokens, capture, limits, size = self.scan_queue.get_nowait()
+        except queue.Empty:
+            pass
+        else:
+            self.scanning = False
+            if revision == self.usage_revision:
+                self.usage_cache[key] = (time.monotonic(), tokens, capture)
+                if size is not None:
+                    self.sizes[key] = size
+                self.limits.update(limits)
+            if self.options.get(self.selected):
+                self.recarregar()
+        opt = self.options.get(self.selected)
+        if opt and not self.scanning:
+            data = self.usage_cache.get(opt.key)
+            if data is None or time.monotonic() - data[0] > 60:
+                keys = [o.key for o in self.options.values() if o.isolated]
+                self.scanning = True
+                path = self.selected_path if opt.key not in self.sizes else None
+                threading.Thread(target=self.scan_usage, args=(BASE, opt.key, keys, self.scan_queue,
+                                 self.usage_revision, path), daemon=True).start()
+        if self.scan_after is None:
+            self.scan_after = self.after(250 if self.scanning else 1000, self.poll_usage)
+
+    @staticmethod
+    def scan_usage(base, selected, keys, results, revision, folder):
+        tokens, capture, limits = None, False, {}
+        size = None
+        try:
+            for key in keys:
+                try:
+                    limits[key] = profile_usage.read_limits(profile_code.code_config_dir(base, key))
+                except (ValueError, OSError):
+                    limits[key] = {}
+            if selected in keys:
+                path = profile_code.code_config_dir(base, selected)
+                tokens = profile_usage.read_usage(path)
+                capture = profile_usage.limit_capture_enabled(path)
+            if folder is not None:
+                size = App.folder_size(folder)
+        except (ValueError, OSError):
+            pass
+        finally:
+            results.put((revision, selected, tokens, capture, limits, size))
+
+    @staticmethod
+    def folder_size(folder):
+        """Count directory entries without following Windows reparse points or opening their contents."""
+        try:
+            validar_pasta_para_abrir(folder)
+        except (OSError, ValueError):
+            return None, True
+        if not os.path.isdir(folder):
+            return 0, False
+        folders = [folder]
+        end = time.monotonic() + 1.5
+        size = 0
+        partial = False
+        while folders:
+            try:
+                with os.scandir(folders.pop()) as entries:
+                    for entry in entries:
+                        if time.monotonic() > end:
+                            return size, True
+                        data = entry.stat(follow_symlinks=False)
+                        if data.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+                            continue
+                        if stat.S_ISDIR(data.st_mode):
+                            folders.append(entry.path)
+                        elif stat.S_ISREG(data.st_mode):
+                            size += data.st_size
+            except OSError:
+                partial = True
+        return size, partial
+
+    def toggle_capture(self, p, enable):
+        opt = self.options[p[0]]
+        try:
+            profile_code.desktop_environment(BASE, opt.key)
+            path = profile_code.code_config_dir(BASE, opt.key)
+            if not profile_usage.set_limit_capture(path, enable):
+                dialogo(self, self.t("quotas"), self.t("status_conflict"))
+                return
+        except (ValueError, OSError) as e:
+            dialogo(self, self.t("erro"), str(e))
+            return
+        self.refresh_usage(p)
+
+    def code_action(self, p, copy=False, login=False):
+        opt = self.options[p[0]]
+        key = opt.key if opt.isolated else None
+        try:
+            if copy:
+                command = profile_code.powershell_command(BASE, key)
+                self.clipboard_clear()
+                self.clipboard_append(command)
+                self.feedback(self.t("copied"))
+            else:
+                if opt.isolated and opt.sharing:
+                    profile_code.share_resources(BASE, key, True, refresh=True)
+                profile_code.open_terminal(BASE, key, login=login)
+        except FileNotFoundError:
+            setup = dialogo(self, self.t("code_settings"), self.t("missing_cli"),
+                           botoes=[("code.claude.com ↗", True, "primario"), (self.t("fechar"), False, "normal")])
+            if setup:
+                webbrowser.open("https://code.claude.com/docs/en/setup")
+        except (OSError, ValueError) as e:
+            dialogo(self, self.t("erro"), str(e))
+
+    def feedback(self, text):
+        if not self.login_perfil:
+            self.mostrar_status(text, False)
+            self.after(4000, self.esconder_status)
 
     def precisa_claude(self):
         if not self.claude:
             dialogo(self, self.t("erro"), self.t("ausente"))
         return bool(self.claude)
 
+    def launch_desktop(self, p, url=None):
+        with db() as con:
+            opt = prefs.all_settings(con).get(p[0])
+        if opt is None:
+            raise ValueError(self.t("pasta_invalida"))
+        if opt.isolated and opt.sharing:
+            profile_code.share_resources(BASE, opt.key, True, refresh=True)
+        env = profile_code.desktop_environment(BASE, opt.key) if opt.isolated else None
+        abrir_claude(self.claude, p[2], url, env=env)
+
+    def _chip(self, parent, text, color):
+        return tk.Label(parent, text="●  " + text, bg=C["CHIP"], fg=color, padx=6, font=(FONTE, 9))
+
     def abrir(self, p):
-        if self.precisa_claude():
-            try:
-                abrir_claude(self.claude, p[2])
-            except Exception as e:
-                dialogo(self, self.t("erro"), str(e))
-            self.after(1500, self.forcar_estado)
+        try:
+            path = normalizar(p[2])
+            pids = [pid for pid, folder in _claudes_com_pasta() if normalizar(folder) == path]
+            result = windows_profiles.focus_profile_window(pids) if pids else windows_profiles.FocusResult.MISSING
+            if result == windows_profiles.FocusResult.BLOCKED:
+                self.feedback(self.t("focus_blocked"))
+                return
+            if result == windows_profiles.FocusResult.MISSING:
+                if time.monotonic() < self.pending_open.get(path, 0):
+                    return
+                if not self.precisa_claude():
+                    return
+                self.launch_desktop(p)
+                self.pending_open[path] = time.monotonic() + 4
+                self.feedback(self.t("opening", n=p[1]))
+            with db() as con:
+                con.execute("UPDATE profile_options SET last_open=strftime('%s','now') WHERE profile=?", (p[0],))
+            self.after(700, self.forcar_estado)
+        except (OSError, ValueError) as e:
+            dialogo(self, self.t("erro"), str(e))
 
     def fechar_perfil(self, p):
         if self.login_perfil and self.login_perfil[0] == p[0]:
@@ -1914,7 +2441,7 @@ class App(tk.Tk):
         self.after(5000, self.esconder_status)
 
     # ----- fotos -----
-    def escolher_foto(self, p):
+    def escolher_foto(self, p, callback=None, owner=None):
         j = Janela(self, self.t("fotos_titulo", n=p[1]), largura=520, altura=520)
         tk.Label(j, text=self.t("fotos_dica"), bg=C["PAINEL"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w", justify="left", wraplength=460).pack(fill="x", padx=20, pady=(16, 6))
@@ -1926,10 +2453,14 @@ class App(tk.Tk):
         estado = {"colunas": 0}
 
         def definir(foto):
-            with db() as con:
-                con.execute("UPDATE perfis SET foto = ? WHERE id = ?", (foto, p[0]))
+            if callback is None:
+                with db() as con:
+                    con.execute("UPDATE perfis SET foto = ? WHERE id = ?", (foto, p[0]))
+            else:
+                callback(foto)
             j.destroy()
-            self.recarregar()
+            if callback is None:
+                self.recarregar()
 
         def desenhar(largura):
             colunas = max(3, (largura - 8) // 96)
@@ -1970,6 +2501,9 @@ class App(tk.Tk):
             Botao(rodape, "+  " + self.t("adicionar_img"), adicionar, tipo="primario").pack(side="left")
         Botao(rodape, self.t("abrir_fotos"), lambda: os.startfile(FOTOS)).pack(side="left", padx=6)
         Botao(rodape, self.t("sem_foto"), lambda: definir(None), tipo="fantasma").pack(side="right")
+        if owner:
+            j.transient(owner)
+            j.bind("<Destroy>", lambda e: owner.grab_set() if e.widget is j and owner.winfo_exists() else None, add="+")
         j.mostrar()
 
     # ----- login -----
@@ -1977,7 +2511,7 @@ class App(tk.Tk):
         if not self.precisa_claude():
             return
         try:
-            abrir_claude(self.claude, p[2])
+            self.launch_desktop(p)
         except (OSError, ValueError) as e:
             dialogo(self, self.t("erro"), str(e))
             return
@@ -2003,7 +2537,7 @@ class App(tk.Tk):
             dialogo(self, self.t("erro"), self.t("invalido"))
             return
         try:
-            abrir_claude(self.claude, perfil[2], url)
+            self.launch_desktop(perfil, url)
         except (OSError, ValueError) as e:
             dialogo(self, self.t("erro"), e.strerror if isinstance(e, OSError) and e.strerror else self.t("pasta_invalida"))
             return
@@ -2037,36 +2571,179 @@ class App(tk.Tk):
 
     # ----- outras ações -----
     def novo(self):
-        nome = dialogo(self, self.t("novo"), self.t("novo_pergunta"), entrada="",
-                       botoes=[(self.t("ok"), True, "primario"), (self.t("cancelar"), None, "normal")])
-        if not nome:
-            return
-        try:
-            with db() as con:
-                novo_id = self._inserir(con, nome)
-        except sqlite3.IntegrityError:
-            dialogo(self, self.t("erro"), self.t("existe"))
-            return
-        except OSError as e:
-            dialogo(self, self.t("erro"), str(e))
-            return
-        self.forcar_estado()
-        # Logo depois de criar, já pede a foto (galeria ou upload).
-        perfil = next((p for p in self.perfis() if p[0] == novo_id), None)
-        if perfil:
-            self.escolher_foto(perfil)
+        self.edit_profile(None)
 
-    def renomear(self, p):
-        nome = dialogo(self, self.t("renomear"), self.t("renomear_pergunta"), entrada=p[1],
-                       botoes=[(self.t("ok"), True, "primario"), (self.t("cancelar"), None, "normal")])
-        if not nome:
+    def edit_profile(self, p):
+        with db() as con:
+            options = prefs.all_settings(con)
+        opt = options[p[0]] if p else None
+        color, shortcut = (opt.color, opt.shortcut) if opt else prefs.defaults(options)
+        title = self.t("edit_profile" if p else "novo")
+        j = Janela(self, title, largura=470, altura=590)
+        footer = tk.Frame(j, bg=C["PAINEL"])
+        footer.pack(side="bottom", fill="x", padx=16, pady=10)
+        scroll = Rolavel(j, C["PAINEL"])
+        scroll.pack(fill="both", expand=True)
+        form = tk.Frame(scroll.dentro, bg=C["PAINEL"])
+        form.pack(fill="x", padx=18, pady=14)
+        name = tk.StringVar(j, p[1] if p else "")
+        photo = tk.StringVar(j, (p[3] or "") if p else "")
+        tint = tk.StringVar(j, color)
+        keys = tk.StringVar(j, shortcut)
+        isolated = tk.BooleanVar(j, bool(opt.isolated) if opt else True)
+        border = tk.BooleanVar(j, bool(opt.border) if opt else False)
+        tray = tk.BooleanVar(j, bool(opt.tray) if opt else False)
+        sharing = tk.BooleanVar(j, bool(opt.sharing) if opt else False)
+
+        self.heading(form, title, 15).pack(fill="x")
+        preview = tk.Frame(form, bg=form["bg"])
+        preview.pack(fill="x", pady=8)
+        size = self.px(44)
+        canvas = tk.Canvas(preview, width=size, height=size, bg=form["bg"], highlightthickness=0)
+        canvas.pack(side="left", padx=(0, 8))
+        def refresh(*_):
+            desenhar_avatar(canvas, name.get(), photo.get(), size, form["bg"], 0, tint.get())
+        for var in (name, photo, tint):
+            var.trace_add("write", refresh)
+        refresh()
+        Botao(preview, self.t("foto"), lambda: self.escolher_foto(
+            (p[0] if p else None, name.get(), "", photo.get()), photo.set, j), tamanho=9).pack(side="left")
+
+        def entry(key, variable):
+            self.heading(form, self.t(key), 10).pack(fill="x", pady=(8, 3))
+            field = tk.Entry(form, textvariable=variable, bg=C["BTN"], fg=C["TEXTO"],
+                             insertbackground=C["TEXTO"], font=(FONTE, 11), relief="flat")
+            field.pack(fill="x", ipady=4)
+            return field
+        first = entry("name", name)
+        self.heading(form, self.t("color"), 10).pack(fill="x", pady=(9, 4))
+        palette = tk.Frame(form, bg=form["bg"])
+        palette.pack(fill="x")
+        for value in prefs.COLORS:
+            tk.Radiobutton(palette, text="●", value=value, variable=tint, indicatoron=False,
+                           selectcolor=value, bg=value, fg="white", activeforeground="white", width=2,
+                           activebackground=value, font=(FONTE, 11, "bold"), relief="flat", borderwidth=1,
+                           cursor="hand2", padx=1, pady=1).pack(side="left", padx=(0, 4))
+        contrast = self.note(form, "", color=C["SUB"])
+        def check_color(*_):
+            def luminance(hex_color):
+                rgb = [int(hex_color[i:i+2], 16) / 255 for i in (1, 3, 5)]
+                linear = [v / 12.92 if v < .04045 else ((v + .055) / 1.055)**2.4 for v in rgb]
+                return sum(x*y for x, y in zip(linear, (.2126, .7152, .0722)))
+            a, b = sorted((luminance(tint.get()), luminance(form["bg"])))
+            contrast.config(text=self.t("low_contrast") if (b+.05)/(a+.05) < 1.8 else "")
+            for button in palette.winfo_children():
+                button.configure(text="✓" if button["value"] == tint.get() else " ")
+        tint.trace_add("write", check_color)
+        check_color()
+        def choose_color():
+            _, value = colorchooser.askcolor(tint.get(), title=self.t("color"), parent=j)
+            if value:
+                tint.set(value)
+        Botao(form, self.t("custom_color"), choose_color, tipo="fantasma", tamanho=9, pady=2).pack(anchor="w")
+        contrast.pack(fill="x")
+        entry("hotkey", keys)
+        self.note(form, self.t("hotkey_hint") + " " + self.t("hotkey_help")).pack(fill="x")
+
+        def checkbox(key, var):
+            c = tk.Checkbutton(form, text=self.t(key), variable=var, bg=form["bg"], fg=C["TEXTO"],
+                               activebackground=form["bg"], activeforeground=C["TEXTO"], selectcolor=C["BTN"],
+                               anchor="w", justify="left", font=(FONTE, 10))
+            c.pack(fill="x", pady=(6, 0))
+            c.bind("<Configure>", lambda e: c.config(wraplength=max(1, e.width - 32)))
+            return c
+        frame_option = checkbox("border", border)
+        if sys.getwindowsversion().build < 22000:
+            frame_option.configure(state="disabled")
+        checkbox("tray", tray)
+        checkbox("isolated", isolated)
+        share = checkbox("share_on", sharing)
+        def sync_share(*_):
+            share.configure(state="normal" if isolated.get() else "disabled")
+        isolated.trace_add("write", sync_share)
+        sync_share()
+        self.note(form, self.t("share_items")).pack(fill="x")
+        self.note(form, self.t("next_launch")).pack(fill="x", pady=6)
+        error = self.note(footer, "", color=C["VERMELHO"])
+        error.pack(fill="x")
+
+        def save():
+            label = name.get().strip()
+            if not label:
+                first.focus_set()
+                return
+            try:
+                binding = windows_profiles.normalize_shortcut(keys.get())
+            except ValueError:
+                error.config(text=self.t("hotkey_hint"))
+                return
+            if binding and any(i != (p[0] if p else None) and item.shortcut == binding for i, item in options.items()):
+                error.config(text=self.t("hotkey_busy"))
+                return
+            i = None
+            assigned = False
+            share_changed = False
+            was_shared = bool(opt and opt.sharing)
+            try:
+                with db() as con:
+                    if p:
+                        i = p[0]
+                        con.execute("UPDATE perfis SET nome=?, foto=? WHERE id=?", (label, photo.get() or None, i))
+                    else:
+                        i = self._inserir(con, label, foto=photo.get() or None)
+                    key = prefs.all_settings(con)[i].key
+                    self.hotkeys.set(i, binding)
+                    assigned = True
+                    share_on = bool(isolated.get() and sharing.get())
+                    con.execute("UPDATE profile_options SET color=?, shortcut=?, isolated=?, border=?, sharing=?, tray=? "
+                                "WHERE profile=?", (tint.get(), binding, isolated.get(), border.get(), share_on, tray.get(), i))
+                    con.execute("INSERT OR REPLACE INTO config VALUES ('selected_code_key',?)", (key,))
+                    if share_on != was_shared:
+                        profile_code.share_resources(BASE, key, share_on)
+                        share_changed = True
+                self.selected = i
+                self.shortcuts[i] = binding
+                self.shortcut_errors.pop(i, None)
+            except (OSError, ValueError, sqlite3.Error) as e:
+                reason = self.t("existe") if isinstance(e, sqlite3.IntegrityError) else str(e)
+                if not assigned and isinstance(e, (ValueError, OSError)) and i is not None:
+                    reason = self.t("hotkey_busy")
+                if assigned:
+                    try:
+                        self.hotkeys.set(i, shortcut if opt and i not in self.shortcut_errors else "")
+                    except (OSError, ValueError):
+                        self.shortcuts.pop(i, None)
+                if share_changed:
+                    try:
+                        profile_code.share_resources(BASE, key, was_shared)
+                    except (OSError, ValueError) as restore_error:
+                        reason += "\n" + str(restore_error)
+                error.config(text=reason)
+                return
+            j.destroy()
+            self.usage_revision += 1
+            self.usage_cache.pop(key, None)
+            self.forcar_estado()
+
+        Botao(footer, self.t("save"), save, tipo="primario").pack(side="right")
+        Botao(footer, self.t("cancelar"), j.destroy, tipo="fantasma").pack(side="right", padx=6)
+        j.bind("<Return>", lambda e: save() if isinstance(e.widget, tk.Entry) else None)
+        j.mostrar()
+        first.focus_set()
+
+    def save_windows_shortcut(self, p):
+        import profile_shortcut
+        name = re.sub(r'[^\w -]', "_", p[1]).strip(" .")[:60] or "Claude"
+        destination = filedialog.asksaveasfilename(parent=self, title=self.t("save_link"), defaultextension=".lnk",
+                       filetypes=[("Windows", "*.lnk")], initialfile=f"Claude - {name}.lnk")
+        if not destination:
             return
+        opt = self.options[p[0]]
+        photo = os.path.join(FOTOS, p[3]) if p[3] and foto_disponivel(p[3]) else None
         try:
-            with db() as con:
-                con.execute("UPDATE perfis SET nome = ? WHERE id = ?", (nome, p[0]))
-        except sqlite3.IntegrityError:
-            dialogo(self, self.t("erro"), self.t("existe"))
-        self.recarregar()
+            profile_shortcut.save_shortcut(destination, BASE, opt.key, p[1], opt.color, photo)
+        except (OSError, ValueError, subprocess.SubprocessError) as e:
+            dialogo(self, self.t("erro"), str(e))
 
     def pasta(self, p):
         try:
@@ -2085,6 +2762,10 @@ class App(tk.Tk):
             msg = self.t("excluir_q", n=p[1])
             if identidade is None:
                 msg += "\n\n" + self.t("pastas_preservadas")
+            with db() as con:
+                code_dir = profile_code.code_config_dir(BASE, prefs.all_settings(con)[p[0]].key)
+            if code_dir.is_dir():
+                msg += "\n\n" + self.t("hold_code") + "\n" + str(code_dir)
             if not self.confirmar(self.t("excluir"), msg):
                 return
             apagar = identidade is not None and self.confirmar(self.t("excluir"), self.t("excluir_dados"))
@@ -2116,12 +2797,26 @@ def reiniciar(app):
     if _MUTEX:
         _k32.CloseHandle(wt.HANDLE(_MUTEX))
     args = [sys.executable] if CONGELADO else [sys.executable, os.path.abspath(__file__)]
-    subprocess.Popen(args)
+    subprocess.Popen(args, env=dict(os.environ, MULTI_CLAUDE_HOME=BASE))
     sys.exit()
 
 
 def principal():
     global _MUTEX
+    requested = None
+    if sys.argv[1:2] == ["--open-profile"]:
+        try:
+            requested = shortcut_target(sys.argv[2:])
+        except (ValueError, OSError, sqlite3.Error) as e:
+            ctypes.windll.user32.MessageBoxW(None, str(e), APP, 0x30)
+            return
+    if sys.argv[1:2] == ["--code-terminal"]:
+        try:
+            status = profile_code.run_terminal_command(BASE, sys.argv[2:])
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as e:
+            ctypes.windll.user32.MessageBoxW(None, str(e), APP, 0x10)
+            status = 1
+        raise SystemExit(status)
     if sys.argv[1:2] in (["--link"], ["--browser"]):
         ctypes.windll.user32.MessageBoxW(None, "In Windows Settings → Apps → Default apps, "
                                         "select your browser for web links and Claude for claude://.", APP, 0x40)
@@ -2130,8 +2825,18 @@ def principal():
     _k32.CreateMutexW.restype = wt.HANDLE
     # Uma instância por pasta: cópias portáteis em pastas diferentes podem rodar juntas.
     _MUTEX = _k32.CreateMutexW(None, False, "MultiClaude_" + hashlib.md5(normalizar(BASE).encode()).hexdigest()[:16])
-    if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
-        ctypes.windll.user32.MessageBoxW(None, f"{APP} já está aberto.", APP, 0x40)
+    already_running = ctypes.get_last_error() == 183  # ERROR_ALREADY_EXISTS
+    if requested:
+        if already_running:
+            windows_profiles.allow_manager_foreground(BASE)
+        try:
+            queue_shortcut(requested, time.time())
+        except (OSError, sqlite3.Error) as e:
+            ctypes.windll.user32.MessageBoxW(None, str(e), APP, 0x30)
+            return
+    if already_running:
+        if not requested:
+            ctypes.windll.user32.MessageBoxW(None, f"{APP} já está aberto.", APP, 0x40)
         return
     try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # nitidez em telas com escala
@@ -2139,6 +2844,8 @@ def principal():
         pass
     log(f"{APP} {VERSAO} aberto")
     app = App()
+    windows_profiles.mark_manager_window(app, BASE)
+    app.after(250, app.check_shortcuts)
     app.report_callback_exception = lambda *e: log("ERRO: " + "".join(__import__("traceback").format_exception(*e)))
     app.mainloop()
 

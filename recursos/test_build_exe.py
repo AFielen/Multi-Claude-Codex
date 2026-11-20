@@ -39,7 +39,9 @@ class BuildTests(unittest.TestCase):
                        Path("LICENSE"), Path("NOTICE")]
         self.assets.extend(Path("profile_pictures", name) for name in PORTRAITS)
         script = Path("recursos/build_exe.py")
-        for path in [*self.assets, script]:
+        self.modules = [Path(name + ".py") for name in ("profile_code", "profile_settings", "profile_shortcut",
+                        "profile_text", "profile_translations", "profile_tray", "profile_usage", "windows_profiles")]
+        for path in [*self.assets, *self.modules, script]:
             target = self.root / path
             target.parent.mkdir(exist_ok=True)
             shutil.copyfile(ROOT / path, target)
@@ -62,6 +64,8 @@ class BuildTests(unittest.TestCase):
         bundled = {}
 
         def inspect_freezer_inputs(args, **kwargs):
+            self.assertEqual(set(path.name for path in Path(kwargs["cwd"]).glob("*.py")),
+                             {path.name for path in self.modules})
             for index, arg in enumerate(args):
                 if arg != "--add-data":
                     continue
