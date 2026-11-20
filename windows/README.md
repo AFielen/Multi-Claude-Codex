@@ -2,7 +2,7 @@
 
 Mit MultiCloud Codex lässt sich jedes Claude- oder Codex-Konto in einem eigenen Fenster öffnen. Das portable Paket lässt sich mit dem .NET-10-SDK aus diesem Repository bauen. [Build-Anleitung im Haupt-README](../README.md#build-and-start-on-windows)
 
-Based on Multi Claude, created by Richard KPL. Axel (AFielen) entwickelt und pflegt die Codex-Edition. Der C#-Port basiert auf der Python-Version 2.3.0, Stand `68a1bd07eddbf54eba8349323b0cc4ac5183c501`. [Originalprojekt](https://github.com/RichardKPL/multi-claude) · [MultiCloud Codex](https://github.com/AFielen/Multi-Claude-Codex)
+Based on Multi Claude, created by Richard KPL. Axel (AFielen) entwickelt und pflegt die Codex-Edition in C# mit .NET 10 und WPF. Die frühere Python-Ausgabe dieses Forks ist auf GitHub archiviert. [Originalprojekt](https://github.com/RichardKPL/multi-claude) · [Python-Archiv](https://github.com/AFielen/Multi-Claude-Codex/tree/archive/python-desktop)
 
 ## Start
 
@@ -31,15 +31,15 @@ Der CPU-Wert gibt den Anteil an der verfügbaren CPU-Zeit über alle logischen P
 
 ## Entwicklung und Prüfung
 
-Im Repository-Stamm auf Windows x64 mit .NET-10-SDK ausführen. Die Tests benötigen eine interaktive Windows-Sitzung und Python mit Tk für die Referenzdaten. Der Rauchtest kompiliert mit dem Windows-.NET-Framework-Compiler einen fiktiven Desktop-Starter und zeichnet dessen Startparameter in einem temporären Ordner auf. Die C#-Anwendung selbst benötigt kein Python.
+Die folgenden Befehle im Repository-Stamm in einer interaktiven Windows-x64-Sitzung mit dem .NET-10-SDK ausführen. Die C#-Tests verwenden einen separaten Testkatalog. Für die Startprüfung des portablen Pakets zeichnet ein fiktiver Desktop-Starter die übergebenen Profilpfade auf.
 
 ```powershell
 dotnet run --project windows/Checks/Checks.csproj -c Release
 dotnet publish windows/MultiClaude/MultiClaude.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o dist/wpf-win-x64
-python windows/Checks/smoke_published.py "dist/wpf-win-x64/Multi Claude.exe"
+dotnet run --project windows/Checks/Checks.csproj -c Release --no-build -- --smoke "dist/wpf-win-x64/Multi Claude.exe"
 ```
 
-Die Prüfungen decken SQLite-Übernahme, Bearbeiten und Sortieren, Schutz externer Ordner, Tastenkürzel, Windows-Verknüpfungen, Code-Ressourcenfreigabe, Statuszeile und WPF-Bedienung ab. Der Rauchtest öffnet zwei von Python 2.3.0 registrierte Profile vor und nach einem vollständigen Prozessneustart. Er vergleicht die ursprünglichen IDs, die gespeicherten Pfade und die tatsächlichen Desktop- und Code-Pfade beider Kindprozesse.
+Die Prüfungen decken SQLite-Übernahme, Bearbeiten und Sortieren, Schutz externer Ordner, Tastenkürzel, Windows-Verknüpfungen, Code-Ressourcenfreigabe, Statuszeile und WPF-Bedienung ab. Der Pakettest öffnet zwei Profile aus einem Katalog im Format der Version 2.3.0 vor und nach einem vollständigen Prozessneustart. Er vergleicht die ursprünglichen IDs, die gespeicherten Pfade und die tatsächlichen Desktop- und Code-Pfade beider Kindprozesse.
 
 ## Daten bei einem späteren Wechsel
 

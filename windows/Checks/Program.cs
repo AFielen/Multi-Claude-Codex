@@ -8,11 +8,17 @@ using System.Text.Json;
 internal static class CheckRunner
 {
     [STAThread]
-    public static int Main()
+    public static int Main(string[] args)
     {
         var temp = Directory.CreateTempSubdirectory("multi-claude-wpf-checks-");
         try
         {
+            if (args is ["--smoke", var executable])
+            {
+                PublishedSmoke.Run(Path.GetFullPath(executable), temp.FullName);
+                return 0;
+            }
+            if (args.Length != 0) throw new ArgumentException("Usage: Checks [--smoke <published executable>]");
             foreach (string language in new[] { "pt", "en", "es", "fr", "de", "it", "ru", "ja", "zh", "ko" })
                 if (Texts.Get(language, "overview") == "overview" || Texts.Get(language, "novo") == "novo")
                     throw new Exception("Missing language resources for " + language);

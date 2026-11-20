@@ -1,4 +1,4 @@
-name: Verify Windows build and website
+name: Verify Windows WPF build
 
 on: [pull_request, workflow_dispatch]
 
@@ -14,40 +14,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
-          python-version: '3.14'
+          dotnet-version: '10.0.x'
 
-      - name: Create clean Python environment
+      - name: Use the same temporary path in all fixture processes
         run: |
-          python -m venv "$env:RUNNER_TEMP\build-venv"
-          "$env:RUNNER_TEMP\build-venv\Scripts" >> $env:GITHUB_PATH
-          # Keep temporary fixture paths consistent between Python, PowerShell and Explorer.
           "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
           "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
 
-      - name: Install build dependencies
-        run: python -m pip install --require-hashes -r requirements-build.txt
+      - name: Run Windows integration and WPF checks
+        run: dotnet run --project windows/Checks/Checks.csproj -c Release
 
-      - name: Run desktop and packaging tests
-        run: python -m unittest discover -s recursos -p "test_*.py"
+      - name: Build portable Windows package
+        run: dotnet publish windows/MultiClaude/MultiClaude.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=None -o dist/wpf-win-x64
 
-      - name: Build portable executable
-        run: python recursos/build_exe.py
-
-      - name: Smoke-test executable
-        run: python recursos/smoke_exe.py
-
-      - name: Verify profile shortcuts and isolation in the packaged app
-        run: python recursos/smoke_profile_workflow.py
-
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: '24'
-          package-manager-cache: false
-
-      - name: Install browser test dependency
-        run: npm install --prefix recursos --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.62.1
-
-      - name: Test website in Chrome
-        run: node recursos/test_site_localization.cjs
+      - name: Test the published executable
+        run: dotnet run --project windows/Checks/Checks.csproj -c Release --no-build -- --smoke "dist/wpf-win-x64/Multi Claude.exe"

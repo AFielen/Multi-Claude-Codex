@@ -6,13 +6,13 @@
     <Version>2.3.0</Version>
     <InformationalVersion>2.3.0-wpf</InformationalVersion>
     <Description>Multi Claude · Modified WPF edition</Description>
-    <ApplicationIcon>../../recursos/icone.ico</ApplicationIcon>
+    <ApplicationIcon>Resources/Manager.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Checks" />
     <EmbeddedResource Include="Resources/*.json;Resources/*.ps1" />
     <EmbeddedResource Include="$(ApplicationIcon)" LogicalName="MultiClaude.Resources.Manager.ico" />
-    <Content Include="../../profile_pictures/*.png" Link="gallery/%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Resources/Gallery/*.png" Link="gallery/%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../LICENSE;../../NOTICE;../../AUTHORS" Link="%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
