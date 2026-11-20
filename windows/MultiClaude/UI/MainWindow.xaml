@@ -1,0 +1,173 @@
+<Window x:Class="MultiClaude.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Multi Claude" Width="480" Height="360" MinWidth="350" MinHeight="280"
+        Background="{DynamicResource Bg}" Foreground="{DynamicResource Text}" FontFamily="Segoe UI"
+        UseLayoutRounding="True" PreviewKeyDown="OnWindowKey" SizeChanged="OnResize">
+    <Window.Resources>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource Muted}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="Heading" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="Action" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Margin" Value="0,0,4,2"/>
+            <Setter Property="Padding" Value="7,2"/>
+            <Setter Property="MinHeight" Value="22"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style x:Key="StrongAction" TargetType="Button" BasedOn="{StaticResource Action}">
+            <Setter Property="Background" Value="{DynamicResource Accent}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,3"/>
+        </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="8,5"/>
+            <Setter Property="Background" Value="{DynamicResource Panel}"/>
+        </Style>
+        <Style x:Key="Scroll" TargetType="ScrollViewer">
+            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+            <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="Padding" Value="7,3"/>
+            <Setter Property="Focusable" Value="False"/>
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="8,4,8,3">
+        <DockPanel DockPanel.Dock="Top" Margin="2,0,0,4" LastChildFill="True">
+            <Button DockPanel.Dock="Right" x:Name="SettingsButton" Content="⚙" FontSize="16" Padding="6,0"
+                    ToolTip="{Binding [config]}" AutomationProperties.Name="{Binding [config]}" Click="ShowSettings"/>
+            <Button DockPanel.Dock="Right" x:Name="NewProfile" Margin="0,0,4,0" Padding="8,2" Content="{Binding [novo]}" Click="NewClick"/>
+            <TextBlock Text="Multi Claude" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+        </DockPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="2,2,2,0">
+            <TextBlock DockPanel.Dock="Right" FontSize="10"><Hyperlink Click="AuthorClick" Foreground="{DynamicResource Muted}" ToolTip="https://github.com/RichardKPL">Based on Multi Claude, created by Richard KPL</Hyperlink></TextBlock>
+            <TextBlock x:Name="Feedback" Text="v2.3.0 · Modified edition" FontSize="10" Foreground="{DynamicResource Muted}" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
+        </DockPanel>
+        <TextBlock x:Name="DesktopInstallationNotice" DockPanel.Dock="Top" Visibility="Collapsed" Style="{StaticResource Caption}"
+                   Margin="2,1,2,4" Text="{Binding [ausente]}"/>
+        <Border x:Name="LoginBanner" DockPanel.Dock="Top" Visibility="Collapsed" Style="{StaticResource Card}" Margin="0,0,0,3">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Right">
+                    <Button x:Name="PasteLink" Click="PasteClick" Style="{StaticResource Action}" Content="{Binding [colar]}"/>
+                    <Button Click="CancelLoginClick" Style="{StaticResource Action}" Content="{Binding [cancelar]}"/>
+                </StackPanel>
+                <TextBlock x:Name="LoginMessage" TextWrapping="Wrap" FontSize="12" VerticalAlignment="Center"/>
+            </DockPanel>
+        </Border>
+        <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition x:Name="SideColumn" Width="0"/><ColumnDefinition/></Grid.ColumnDefinitions>
+            <DockPanel x:Name="Sidebar" Visibility="Collapsed" Margin="0,0,6,0" Background="{DynamicResource Panel}">
+                <DockPanel DockPanel.Dock="Top" Margin="6,3">
+                    <Button DockPanel.Dock="Right" Content="Ctrl+K" Style="{StaticResource Action}" Click="SearchClick" ToolTip="{Binding [switch_profile]}"/>
+                    <TextBlock Text="{Binding [profiles]}" Style="{StaticResource Heading}"/>
+                </DockPanel>
+                <ListBox x:Name="ProfileList" AutomationProperties.Name="{Binding [profiles]}" BorderThickness="0" HorizontalContentAlignment="Stretch"
+                         SelectionChanged="SidebarSelect" PreviewKeyDown="SidebarKey" MouseDoubleClick="SidebarDoubleClick"
+                         PreviewMouseLeftButtonDown="SidebarMouseDown" PreviewMouseMove="SidebarMouseMove" AllowDrop="True" Drop="SidebarDrop"/>
+            </DockPanel>
+            <DockPanel Grid.Column="1">
+                <DockPanel x:Name="CompactPicker" DockPanel.Dock="Top" Margin="0,0,0,4">
+                    <Button x:Name="SwitchProfile" DockPanel.Dock="Right" Content="{Binding [switch_profile]}" Click="SearchClick" ToolTip="Ctrl+K" Padding="7,2"/>
+                    <UniformGrid x:Name="QuickProfiles" Rows="1" Margin="0,0,3,0"/>
+                </DockPanel>
+                <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
+                    <TextBlock Text="{Binding [nenhum]}" FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="{Binding [nenhum_sub]}" TextWrapping="Wrap" Margin="0,3,0,12"/>
+                    <WrapPanel HorizontalAlignment="Center">
+                        <Button Content="{Binding [novo]}" Style="{StaticResource StrongAction}" Click="NewClick"/>
+                        <Button Content="{Binding [importar]}" Style="{StaticResource Action}" Click="ImportClick"/>
+                    </WrapPanel>
+                </StackPanel>
+                <DockPanel x:Name="Workspace">
+                    <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Margin="0,0,0,3">
+                        <DockPanel>
+                            <WrapPanel DockPanel.Dock="Bottom" Margin="0,3,0,0">
+                                <Button x:Name="EditProfile" Click="EditClick" Content="{Binding [edit_profile]}" Style="{StaticResource Action}"/>
+                                <Button x:Name="SignIn" Click="LoginClick" Content="{Binding [entrar]}" Style="{StaticResource Action}"/>
+                                <Button x:Name="CloseDesktopButton" Click="CloseClick" Content="{Binding [fechar]}" Style="{StaticResource Action}"/>
+                            </WrapPanel>
+                            <Button x:Name="OpenProfile" DockPanel.Dock="Right" Click="OpenClick" Content="{Binding [abrir]}" VerticalAlignment="Center" Style="{StaticResource StrongAction}"/>
+                            <Border x:Name="Avatar" DockPanel.Dock="Left" Height="33" Width="33" CornerRadius="16" VerticalAlignment="Center" Margin="0,0,7,0">
+                                <Grid><TextBlock x:Name="Initial" FontSize="16" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/><Ellipse x:Name="Portrait"/></Grid>
+                            </Border>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="SelectedName" FontWeight="SemiBold" FontSize="16" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="DesktopStatus" Style="{StaticResource Caption}"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <TabControl x:Name="Tabs" Padding="0" BorderBrush="{DynamicResource Line}" Background="{DynamicResource Panel}" Foreground="{DynamicResource Text}">
+                        <TabItem x:Name="OverviewTab" Header="{Binding [overview]}">
+                            <ScrollViewer x:Name="OverviewScroll" Style="{StaticResource Scroll}">
+                                <StackPanel>
+                                    <DockPanel>
+                                        <Button x:Name="RefreshOverview" DockPanel.Dock="Right" Style="{StaticResource Action}" Content="{Binding [refresh]}" Click="RefreshClick"/>
+                                        <TextBlock Text="{Binding [quota_used]}" Style="{StaticResource Heading}"/>
+                                    </DockPanel>
+                                    <UniformGrid x:Name="LimitsGrid" Columns="2">
+                                        <StackPanel Margin="0,2,9,3">
+                                            <TextBlock Text="{Binding [five_hour]}" Style="{StaticResource Caption}"/>
+                                            <TextBlock x:Name="FivePercent" FontSize="19" FontWeight="SemiBold"/>
+                                            <ProgressBar x:Name="FiveBar" Height="4" Maximum="100"/>
+                                            <TextBlock x:Name="FiveReset" Style="{StaticResource Caption}"/>
+                                        </StackPanel>
+                                        <StackPanel Margin="0,2,0,3">
+                                            <TextBlock Text="{Binding [seven_day]}" Style="{StaticResource Caption}"/>
+                                            <TextBlock x:Name="WeekPercent" FontSize="19" FontWeight="SemiBold"/>
+                                            <ProgressBar x:Name="WeekBar" Height="4" Maximum="100"/>
+                                            <TextBlock x:Name="WeekReset" Style="{StaticResource Caption}"/>
+                                        </StackPanel>
+                                    </UniformGrid>
+                                    <TextBlock x:Name="QuotaMessage" Style="{StaticResource Caption}"/>
+                                    <Button x:Name="OverviewCapture" HorizontalAlignment="Left" Style="{StaticResource Action}" Click="ToggleCapture"/>
+                                    <TextBlock x:Name="WideTokens" Margin="0,7,0,1" Style="{StaticResource Heading}" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem x:Name="CodeTab" Header="{Binding [code_settings]}">
+                            <ScrollViewer x:Name="CodeScroll" Style="{StaticResource Scroll}">
+                                <StackPanel>
+                                    <TextBlock x:Name="CodeMode" Style="{StaticResource Caption}"/>
+                                    <WrapPanel Margin="0,3"><Button Click="TerminalClick" Content="{Binding [terminal]}" Style="{StaticResource Action}"/>
+                                        <Button Click="CopyCommandClick" Content="{Binding [copy_command]}" Style="{StaticResource Action}"/>
+                                        <Button x:Name="CodeLogin" Click="CodeLoginClick" Content="{Binding [entrar]}" Style="{StaticResource Action}"/>
+                                    </WrapPanel>
+                                    <DockPanel><Button x:Name="RefreshCode" DockPanel.Dock="Right" Style="{StaticResource Action}" Content="{Binding [refresh]}" Click="RefreshClick"/>
+                                        <TextBlock Text="{Binding [code_tokens]}" Style="{StaticResource Heading}"/>
+                                    </DockPanel>
+                                    <TextBlock x:Name="TokenTotal" FontSize="19" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="TokenDetails" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="TokenMessage" Style="{StaticResource Caption}" Margin="0,2"/>
+                                    <Button x:Name="CodeCapture" HorizontalAlignment="Left" Style="{StaticResource Action}" Click="ToggleCapture"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+                        <TabItem x:Name="DetailsTab" Header="{Binding [details]}">
+                            <ScrollViewer x:Name="DetailsScroll" Style="{StaticResource Scroll}"><StackPanel>
+                                <TextBlock Text="{Binding [pasta]}" Style="{StaticResource Heading}"/>
+                                <TextBlock x:Name="DataFolder" TextWrapping="Wrap" Margin="0,2"/>
+                                <WrapPanel><Button Click="FolderClick" Content="{Binding [explorer]}" Style="{StaticResource Action}"/>
+                                    <Button x:Name="SaveShortcut" Click="ShortcutClick" Content="{Binding [save_link]}" Style="{StaticResource Action}"/>
+                                </WrapPanel>
+                                <TextBlock x:Name="Metadata" Style="{StaticResource Caption}"/>
+                                <TextBlock x:Name="DataSize" Style="{StaticResource Caption}"/>
+                                <WrapPanel Margin="0,4">
+                                    <Button x:Name="MoveUp" Click="UpClick" Content="{Binding [up]}" Style="{StaticResource Action}"/>
+                                    <Button x:Name="MoveDown" Click="DownClick" Content="{Binding [down]}" Style="{StaticResource Action}"/>
+                                    <Button x:Name="SignOut" Click="LogoutClick" Content="{Binding [sair]}" Style="{StaticResource Action}"/>
+                                    <Button Click="DeleteClick" Content="{Binding [excluir]}" Style="{StaticResource Action}"/>
+                                </WrapPanel>
+                            </StackPanel></ScrollViewer>
+                        </TabItem>
+                    </TabControl>
+                </DockPanel>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>

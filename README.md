@@ -25,6 +25,10 @@ Modified edition. Based on Multi Claude, created by Richard KPL. The download ba
 
 ---
 
+## Windows WPF edition
+
+The native C#/.NET port of version 2.3.0 is in the Windows project. [Build, test and catalog compatibility](windows/README.md)
+
 ## ✨ Features
 
 | | |

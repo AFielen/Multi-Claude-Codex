@@ -20,3 +20,8 @@ __pycache__/
 *.pyc
 .venv/
 recursos/node_modules/
+
+# Windows WPF build outputs
+windows/**/bin/
+windows/**/obj/
+windows/.vs/
