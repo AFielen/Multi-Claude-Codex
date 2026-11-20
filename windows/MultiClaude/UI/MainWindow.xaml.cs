@@ -210,7 +210,11 @@ public partial class MainWindow : Window
         }
         catch (Exception) { /* The launch action reports executable discovery errors when used. */ }
     }
-    private void AuthorClick(object sender, RoutedEventArgs e) => Safe(() => OpenInShell("https://github.com/RichardKPL"));
+    private void OpenCreditLink(object sender, System.Windows.Navigation.RequestNavigateEventArgs e)
+    {
+        e.Handled = true;
+        Safe(() => OpenInShell(e.Uri.AbsoluteUri));
+    }
     private void NewClick(object sender, RoutedEventArgs e) => Safe(() => Edit(null));
     private void EditClick(object sender, RoutedEventArgs e) => Safe(() => { if (selected != null) Edit(selected); });
     private void ShowSettings(object sender, RoutedEventArgs e) => Safe(Settings);

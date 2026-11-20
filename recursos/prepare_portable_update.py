@@ -75,13 +75,19 @@ def _stable_external(path, source, temporary):
 
 
 def stage(package, destination, expected_sha256=None):
-    """Publish the four release files and the launcher after all four hashes match."""
+    """Stage the release files and launcher, verifying each copied file."""
     package, destination = _plain(package).resolve(strict=True), _durable(destination)
     if package.is_relative_to(destination) or destination.is_relative_to(package):
         raise ValueError("Use separate package and destination folders.")
     files = [_plain(package / name) for name in PACKAGE]
     if not all(path.is_file() for path in files):
         raise ValueError("The package needs Multi Claude.exe, LICENSE, NOTICE and THIRD-PARTY-NOTICES.txt.")
+    # Older releases predate the separate credits file.
+    if os.path.lexists(package / "AUTHORS"):
+        credits = _plain(package / "AUTHORS")
+        if not credits.is_file():
+            raise ValueError("AUTHORS must be a regular file.")
+        files.append(credits)
     hashes = {path.name: _digest(path) for path in files}
     if expected_sha256 and hashes[PACKAGE[0]] != expected_sha256.lower():
         raise ValueError("The executable does not match the supplied SHA-256.")

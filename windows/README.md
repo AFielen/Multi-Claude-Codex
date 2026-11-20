@@ -1,6 +1,6 @@
 # Multi Claude für Windows · WPF-Edition
 
-Lokaler C#-Port der Python-Version 2.3.0, ausgehend von `68a1bd07eddbf54eba8349323b0cc4ac5183c501`. Based on Multi Claude, created by Richard KPL. [Originalprojekt](https://github.com/RichardKPL/multi-claude)
+Based on Multi Claude, created by Richard KPL. Axel (AFielen) entwickelt und pflegt die Codex-Edition. Der C#-Port basiert auf der Python-Version 2.3.0, Stand `68a1bd07eddbf54eba8349323b0cc4ac5183c501`. [Originalprojekt](https://github.com/RichardKPL/multi-claude) · [Multi Claude Codex](https://github.com/AFielen/Multi-Claude-Codex)
 
 ## Start
 
@@ -38,4 +38,4 @@ Der vorhandene 2.3.0-Katalog kann im selben Manager-Ordner weiterverwendet werde
 
 Bei **Import aus einem anderen Katalog** bleibt dessen Code-Basis als `wpf_code_home_<code_key>` in der Zieltabelle `config` gespeichert. Bei einer Kollision numerischer IDs erhält der importierte Eintrag eine freie lokale Zeilennummer. Diese Zusammenführung ist eine separate Nutzeraktion. Für die Übernahme **am bisherigen Speicherort** entfällt sie. Ältere Kataloge erhalten fehlende Python-kompatible Spalten und Profiloptionen. Das Aktivieren der Limitanzeige schreibt erst auf Anforderung in die Code-Konfiguration des ausgewählten Profils.
 
-Das Paket ergänzt die mitgelieferte Bildauswahl unter `gallery\`. Eigene Bilder bleiben unter `profile_pictures\`. Lizenz und Originalattribution stehen in `LICENSE` und `NOTICE`.
+Das Paket ergänzt die mitgelieferte Bildauswahl unter `gallery\`. Eigene Bilder bleiben unter `profile_pictures\`. Wer die Codex-Edition weiterentwickelt und verteilt, findet beide Autorenhinweise und Projektlinks in [AUTHORS](../AUTHORS). Für die Weitergabe gelten die [GPL-3.0](../LICENSE) und der [Originalhinweis](../NOTICE).

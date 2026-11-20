@@ -91,7 +91,7 @@ class DesktopLayoutTests(unittest.TestCase):
         self.assertAlmostEqual(self.ui.winfo_height(), self.ui.px(360), delta=2)
         self.assertTrue(self.ui.picker.winfo_ismapped())
         for text in ("Multi Claude", "Abnahmeprofil", self.ui.t("aguard"), self.ui.t("colar"),
-                     self.ui.t("cancelar"), self.module.ATRIBUICAO):
+                     self.ui.t("cancelar"), self.module.ATRIBUICAO, "Codex · Axel (AFielen)"):
             self.assert_label_fits(text)
 
     def test_status_and_usage_refresh_retain_the_selected_action_and_tab(self):
@@ -120,7 +120,7 @@ class DesktopLayoutTests(unittest.TestCase):
         self.ui.update()
         self.assertEqual(self.ui.layout, (1, True))
         for text in ("Multi Claude", "Abnahmeprofil", self.ui.t("aguard"), self.ui.t("entrar"),
-                     self.ui.t("fechar"), self.ui.t("colar"), self.module.ATRIBUICAO):
+                     self.ui.t("fechar"), self.ui.t("colar"), self.module.ATRIBUICAO, "Codex · Axel (AFielen)"):
             self.assert_label_fits(text)
 
     def test_upgrade_stores_clamped_geometry_and_keeps_future_custom_size(self):

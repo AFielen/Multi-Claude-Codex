@@ -2,20 +2,20 @@
 
 <img src="recursos/icone.png" width="112" alt="Multi Claude">
 
-# Multi Claude
+# Multi Claude Codex
 
 **Run several Claude Desktop accounts side by side — each one in its own window.**
 
-Modified edition. Based on Multi Claude, created by Richard KPL. The download badges link to the original release. Build this edition from source using the instructions below. [Original project](https://github.com/RichardKPL/multi-claude)
+Based on Multi Claude, created by Richard KPL. Axel (AFielen) develops and maintains the Codex edition. [Original project](https://github.com/RichardKPL/multi-claude) · [Codex edition](https://github.com/AFielen/Multi-Claude-Codex)
 
-[![Download](https://img.shields.io/github/v/release/RichardKPL/multi-claude?label=download&color=d97757&style=for-the-badge)](https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe)
+[![Original release](https://img.shields.io/github/v/release/RichardKPL/multi-claude?label=original%20release&color=d97757&style=for-the-badge)](https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe)
 [![License GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-1f1e1d?style=for-the-badge)](LICENSE)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=for-the-badge&logo=windows)](#requirements)
 [![Portable](https://img.shields.io/badge/portable-no%20install-5fa85e?style=for-the-badge)](#download)
 
-[**Website**](https://richardkpl.github.io/multi-claude/) ·
-[**Changelog**](https://richardkpl.github.io/multi-claude/changelog.html) ·
-[**Download**](https://github.com/RichardKPL/multi-claude/releases/latest) ·
+[**Original website**](https://richardkpl.github.io/multi-claude/) ·
+[**Original changelog**](https://richardkpl.github.io/multi-claude/changelog.html) ·
+[**Build the Codex edition**](#windows-wpf-edition) ·
 [**How it works**](#how-it-works) ·
 [**License**](#license--credits)
 
@@ -110,7 +110,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe recursos/smoke_exe.py
 ```
 
-On Windows, the build creates `dist/Multi Claude.exe`. Distribute it together with `LICENSE`, `NOTICE` and `THIRD-PARTY-NOTICES.txt` from the same directory. The build verifies both icons, ten default pictures and the two project license documents against their recorded SHA-256 hashes. To run the source directly, use `.\.venv\Scripts\pythonw.exe "Multi Claude.pyw"`.
+On Windows, the build creates `dist/Multi Claude.exe`. Distribute it together with `LICENSE`, `NOTICE`, `AUTHORS` and `THIRD-PARTY-NOTICES.txt` from the same directory. The build verifies both icons, ten default pictures, the license and the attribution files against their recorded SHA-256 hashes. To run the source directly, use `.\.venv\Scripts\pythonw.exe "Multi Claude.pyw"`.
 
 ```
 Multi Claude.pyw        application source
@@ -118,23 +118,22 @@ recursos/               icon and build script
 profile_pictures/       default profile pictures
 docs/                   website (GitHub Pages)
 LICENSE · NOTICE        GPL-3.0 license + attribution terms
+AUTHORS                 original project and Codex edition credits
 ```
 
 ## 🌐 Website
 
-The website is published from the `docs/` folder by the GitHub Actions workflow in `.github/workflows/pages.yml`. In the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**. The site detects the visitor's browser language on first visit, falls back to English when it is not supported, and also provides a manual language selector.
+The `docs/` folder contains the source for the original Multi Claude website. The site detects the visitor's browser language on first visit, falls back to English when it is not supported, and also provides a manual language selector. [Richard KPL’s project website](https://richardkpl.github.io/multi-claude/)
 
 Screenshots in `docs/img/<language>/` show fictional profiles. They follow the selected website language and fall back to English if an image is unavailable. To regenerate them on Windows with Pillow installed, run `python recursos/capture_screenshots.py` (or append language codes). The capture tool uses a temporary database and disables Claude discovery and status polling.
 
 ## 📄 License & credits
 
-**Multi Claude © 2026 [Richard KPL](https://github.com/RichardKPL)** — free software under the **[GPL-3.0](LICENSE)** with the additional terms in **[NOTICE](NOTICE)**.
+Multi Claude Codex uses the original GNU General Public License, version 3, with the additional attribution terms from Multi Claude. [License](LICENSE) · [Original notice](NOTICE)
 
-You may use, study, modify and redistribute it. If you publish a modified version, it **must**:
+- **Original project.** Based on Multi Claude, created by Richard KPL. © 2026 Richard KPL. [Author](https://github.com/RichardKPL) · [Multi Claude](https://github.com/RichardKPL/multi-claude)
+- **Codex edition.** © 2026 Axel (AFielen) for changes in this edition. [Maintainer](https://github.com/AFielen) · [Multi Claude Codex](https://github.com/AFielen/Multi-Claude-Codex)
 
-- remain open source under the GPL-3.0;
-- keep visible, in the app and in the README: *"Based on Multi Claude, created by Richard KPL"* with a link to this repository;
-- keep the `LICENSE` and `NOTICE` files;
-- be clearly marked as a modified version.
+If you distribute a modified version, include the original `LICENSE` and `NOTICE` and keep Richard's credit visible in the About section, footer and README as described in `NOTICE`. For a version based on Multi Claude Codex, please carry both credits and project links forward and identify your own changes. [Credits to include](AUTHORS)
 
 > **Disclaimer:** "Claude" and "Claude Desktop" are trademarks of Anthropic, PBC. Multi Claude is an independent project and is **not affiliated with, endorsed by or sponsored by Anthropic**. Please use it in accordance with [Claude's terms of service](https://www.anthropic.com/legal/consumer-terms).
