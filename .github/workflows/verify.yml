@@ -1,0 +1,47 @@
+name: Verify Windows build and website
+
+on: [pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.14'
+
+      - name: Create clean Python environment
+        run: |
+          python -m venv "$env:RUNNER_TEMP\build-venv"
+          "$env:RUNNER_TEMP\build-venv\Scripts" >> $env:GITHUB_PATH
+
+      - name: Install build dependencies
+        run: python -m pip install --require-hashes -r requirements-build.txt
+
+      - name: Run desktop and packaging tests
+        run: python -m unittest discover -s recursos -p "test_*.py"
+
+      - name: Build portable executable
+        run: python recursos/build_exe.py
+
+      - name: Smoke-test executable
+        run: python recursos/smoke_exe.py
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install browser test dependency
+        run: npm install --prefix recursos --no-save --package-lock=false --ignore-scripts --no-audit --no-fund playwright@1.62.1
+
+      - name: Test website in Chrome
+        run: node recursos/test_site_localization.cjs

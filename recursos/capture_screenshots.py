@@ -47,8 +47,6 @@ def main():
         app_module = importlib.util.module_from_spec(spec)
         loader.exec_module(app_module)
         app_module.achar_claude = lambda: "demo-only"
-        app_module.devolver_registros = lambda: None
-        app_module.App.vigiar_login = lambda self: None
         app_module.App.atualizar_estado = lambda self: None
         app_module.cfg_set("idioma", "en")
         app_module.cfg_set("tema", "claro")

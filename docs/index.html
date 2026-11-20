@@ -120,7 +120,7 @@
     <div class="nav-links">
       <a class="esconde" href="#recursos" data-i18n="features">Features</a>
       <a class="esconde" href="#como" data-i18n="how">How it works</a>
-      <a class="esconde" href="changelog.html">Changelog</a>
+      <a class="esconde" href="changelog.html" hreflang="pt-BR" data-i18n="changelog">Changelog (Portuguese)</a>
       <a href="https://github.com/RichardKPL/multi-claude">GitHub</a>
       <div class="language-picker"><img id="idioma-bandeira" src="https://flags.restcountries.com/v5/w160/gb.png" alt="" onerror="this.src='img/flags/en.svg'"><label class="sr-only" for="idioma" data-i18n="language">Language</label><select id="idioma" data-i18n-aria="language" aria-label="Language">
         <option value="pt">Português</option><option value="en">English</option><option value="es">Español</option>
@@ -136,12 +136,12 @@
     <h1><span data-i18n="headline">Multiple Claude accounts.</span><br><span class="accent" data-i18n="headlineAccent">At the same time.</span></h1>
     <p class="lead" data-i18n="lead">Multi Claude opens each Claude Desktop account in its own window, with separate sign-ins, sessions and settings. One .exe, no installation.</p>
     <div class="acoes">
-      <a class="btn btn-principal" id="baixar" href="https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe">
-        ⬇ <span data-i18n="download">Download for Windows</span> <small id="versao">portable · .exe</small>
+      <a class="btn btn-principal" id="baixar" data-download href="https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe">
+        ⬇ <span data-i18n="download">Download original Windows release</span> <small id="versao">portable · .exe</small>
       </a>
       <a class="btn btn-sec" href="https://github.com/RichardKPL/multi-claude">★ <span data-i18n="github">View on GitHub</span></a>
     </div>
-    <p class="downloads-count" id="downloads-count" data-i18n="downloadCount" aria-live="polite" hidden></p>
+    <p class="downloads-count" id="downloads-count" aria-live="polite" hidden></p>
     <div class="info-dl"><a href="https://claude.ai/download" data-i18n="requirements">Windows 10 and 11 · requires Claude Desktop</a></div>
     <div class="vitrine"><img data-screenshot="principal-claro.png" src="img/en/principal-claro.png" data-i18n-alt="mainAlt" alt="Multi Claude main window" loading="eager"></div>
   </header>
@@ -151,12 +151,12 @@
     <p class="sub-h2" data-i18n="featuresIntro">Built for people who use more than one Claude account — personal, work or school.</p>
     <div class="grade">
       <div class="card"><div class="ic">👥</div><h3 data-i18n="profiles">Unlimited profiles</h3><p data-i18n="profilesBody">Each profile is an isolated Claude Desktop with its own sign-in and sessions.</p></div>
-      <div class="card"><div class="ic">🔐</div><h3 data-i18n="google">Automatic Google sign-in</h3><p data-i18n="googleBody">Choose an account in your browser and sign-in goes to the right profile.</p></div>
+      <div class="card"><div class="ic">🔐</div><h3 data-i18n="google">Browser sign-in</h3><p data-i18n="googleBody">Upstream v2.1.0 handles the return from your browser automatically. In a build from this source, you can paste the return link into the selected profile.</p></div>
       <div class="card"><div class="ic">🟢</div><h3 data-i18n="status">Live status</h3><p data-i18n="statusBody">See what is connected and open. Open, close or sign out with one click.</p></div>
       <div class="card"><div class="ic">🖼️</div><h3 data-i18n="pictures">Profile pictures</h3><p data-i18n="picturesBody">Built-in gallery or your own images — any image in the folder becomes an option.</p></div>
       <div class="card"><div class="ic">🎨</div><h3 data-i18n="themes">Light, Dark or System</h3><p data-i18n="themesBody">Follows the Windows theme live, including the title bar.</p></div>
       <div class="card"><div class="ic">🌍</div><h3 data-i18n="languages">10 languages</h3><p>Português, English, Español, Français, Deutsch, Italiano, Русский, 日本語, 中文, 한국어.</p></div>
-      <div class="card"><div class="ic">📦</div><h3 data-i18n="portableTitle">Fully portable</h3><p data-i18n="portableBody">All data lives next to the .exe. Carry it on a USB drive.</p></div>
+      <div class="card"><div class="ic">📦</div><h3 data-i18n="portableTitle">Fully portable</h3><p data-i18n="portableBody">New profiles live next to the .exe. Imported profiles stay in their original folders.</p></div>
       <div class="card"><div class="ic">⇩</div><h3 data-i18n="import">Imports existing profiles</h3><p data-i18n="importBody">Finds Claude profiles already on your computer and imports them in seconds.</p></div>
     </div>
   </section>
@@ -167,7 +167,7 @@
     <div class="passos">
       <div class="passo"><div><b data-i18n="step1">Download and open</b><span data-i18n="step1Body">Put the .exe in its own folder. Choose your language on first launch.</span></div></div>
       <div class="passo"><div><b data-i18n="step2">Create a profile</b><span data-i18n="step2Body">Give it a name, choose a picture and click “Sign in”.</span></div></div>
-      <div class="passo"><div><b data-i18n="step3">Choose the account</b><span data-i18n="step3Body">Continue with Google in your browser. If asked, click “Open Claude”. Done.</span></div></div>
+      <div class="passo"><div><b data-i18n="step3">Choose the account</b><span data-i18n="step3Body">Sign in to Claude in your browser and follow the instructions shown for your profile.</span></div></div>
     </div>
   </section>
 
@@ -184,7 +184,7 @@
   <div class="cta">
     <h2 data-i18n="ctaTitle">Ready to use more than one account?</h2>
     <p data-i18n="ctaBody">Free, open source and with no installation.</p>
-    <a class="btn" href="https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe">⬇ <span data-i18n="ctaDownload">Download Multi Claude</span></a>
+    <a class="btn" data-download href="https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe">⬇ <span data-i18n="ctaDownload">Download original release</span></a>
   </div>
 
   <footer>

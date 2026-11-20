@@ -6,6 +6,8 @@
 
 **Run several Claude Desktop accounts side by side — each one in its own window.**
 
+Modified edition. Based on Multi Claude, created by Richard KPL. The download badges link to the original release. Build this edition from source using the instructions below. [Original project](https://github.com/RichardKPL/multi-claude)
+
 [![Download](https://img.shields.io/github/v/release/RichardKPL/multi-claude?label=download&color=d97757&style=for-the-badge)](https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe)
 [![License GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-1f1e1d?style=for-the-badge)](LICENSE)
 [![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078d4?style=for-the-badge&logo=windows)](#requirements)
@@ -28,12 +30,12 @@
 | | |
 |---|---|
 | 👥 **Unlimited profiles** | Every profile is a separate Claude Desktop with its own sign-in, sessions and settings. |
-| 🔐 **Automatic Google sign-in** | Click *Sign in*, pick the account in your browser and you're done — the sign-in lands in the right profile without popping up your main Claude. |
+| 🔐 **Profile sign-in** | Select a profile and explicitly paste its browser return link in the profile's sign-in dialog. |
 | 🟢 **Live status** | See which profiles are signed in and which are open; open and close each one with a single click. |
 | 🖼️ **Profile pictures** | Built-in gallery plus your own images. Any image dropped into `profile_pictures` becomes an option. |
 | 🎨 **Light, Dark or System** | Follows the Windows theme live — title bar included. |
 | 🌍 **10 languages** | Português, English, Español, Français, Deutsch, Italiano, Русский, 日本語, 中文, 한국어. |
-| 📦 **Fully portable** | A single `.exe`. All data lives next to it — carry it on a USB drive. |
+| 📦 **Portable** | Newly created profiles live next to the executable. Imported profiles keep using their original directories. |
 | ⇩ **Profile import** | Finds Claude profiles that already exist on the machine (or another `perfis.db`) and imports them. |
 | 🧨 **Danger zone** | Erase all Multi Claude data behind a typed confirmation. |
 | 📐 **Responsive layout** | One or two columns depending on window size; remembers its size and position. |
@@ -45,22 +47,22 @@
 
 ## ⬇️ Download
 
-1. Download **[`Multi-Claude-Portable.exe`](https://github.com/RichardKPL/multi-claude/releases/latest/download/Multi-Claude-Portable.exe)**.
+1. For the modified edition, use **Run and build from source** below. The original author's published build is available from the [upstream releases page](https://github.com/RichardKPL/multi-claude/releases/latest).
 2. Put it in a folder of its own (e.g. `Documents\Multi Claude`) — that's where your data will be stored.
 3. Run it. On first launch it asks for your language and offers to import any profiles it finds.
 
-> Windows SmartScreen may warn about an unknown publisher (the executable is not code-signed). Click **More info → Run anyway**. The full source code is in this repository if you want to review it or build your own `.exe`.
+> The local build produces an unsigned Windows executable.
 
 ### Requirements
 
 - Windows 10 or 11
 - [Claude Desktop](https://claude.ai/download) installed
+- A writable local folder for the portable app and its profiles (a local USB drive also works).
 
 ## 🚀 Usage
 
 1. **+ New profile** → give it a name and pick a picture.
-2. **Sign in** → in the Claude window that opens, click *Continue with Google* and choose the account.
-   If the browser asks, click *Open Claude*. The rest is automatic.
+2. Select **Sign in** on the profile you want and complete sign-in in Claude. If the browser shows a return link for Claude Desktop, copy it, choose **Paste link** in Multi Claude, check the profile name in the dialog, paste and confirm. The manual flow requires a browser that exposes the return link.
 3. Once signed in, use **Open** / **Close**. The **⋯** menu holds *Profile picture*, *Rename*, *Data folder*, *Sign out* and *Delete*.
 
 <div align="center">
@@ -71,15 +73,15 @@
 ## ⚙️ How it works
 
 - Each profile runs Claude Desktop with `--user-data-dir=<profile folder>`, so sign-ins and sessions stay isolated.
-- **Sign-in:** the browser hands the sign-in back through a `claude://` link. The Microsoft Store build of Claude registers that protocol inside its own package, so Windows always delivers it to the main Claude — for a moment it starts a `Claude.exe` with the link on its command line. While a sign-in is in progress, Multi Claude watches for new processes, reads that link, ends the short-lived process (so the main Claude doesn't pop up) and hands the link to the profile's Claude.
-  Nothing ever leaves your computer.
-- **Status:** "signed in" comes from the profile's own Claude log; "open" comes from the running processes.
-- **Sign out** closes the profile's Claude and deletes cookies and tokens for that profile only.
+- **Sign-in** passes the link you explicitly confirm to the selected Claude Desktop instance. Canceling or timing out discards the pending action. If an older Multi Claude installation registered itself as a browser or protocol handler, open Windows Settings → Apps → Default apps and choose your browser for web links and Claude Desktop for `claude://`.
+- **Status** uses each profile's Claude log and configuration for sign-in status, and the running Claude processes for open status.
+- **Sign out** requests a normal shutdown of the profile's Claude instance, then clears its local cookies and account information. A cleanup error is shown in the app.
+- **Delete and reset** preserve external profile folders. Erasing a registered profile's data requires an exclusively used profile directory directly inside `dados`. Unregistered directories are also preserved.
 
 ### Where data lives (portable mode)
 
 ```
-Multi-Claude-Portable.exe
+Multi Claude.exe
 perfis.db            ← profiles, language, theme (SQLite)
 log.txt              ← diagnostic log
 dados\<profile>\     ← each profile's Claude data
@@ -90,13 +92,15 @@ Paths inside the program folder are stored as relative paths, so you can move th
 
 ## 🛠️ Run and build from source
 
-```bash
-pip install pillow pyinstaller
-pythonw "Multi Claude.pyw"          # run directly
-python recursos/build_exe.py        # builds dist/Multi Claude.exe (portable, single file)
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
+.\.venv\Scripts\python.exe -m unittest discover -s recursos -p "test_*.py"
+.\.venv\Scripts\python.exe recursos/build_exe.py
+.\.venv\Scripts\python.exe recursos/smoke_exe.py
 ```
 
-The generated `.exe` only bundles the icon and the default pictures — never any user data.
+On Windows, the build creates `dist/Multi Claude.exe`. Distribute it together with `LICENSE`, `NOTICE` and `THIRD-PARTY-NOTICES.txt` from the same directory. The build verifies both icons, ten default pictures and the two project license documents against their recorded SHA-256 hashes. To run the source directly, use `.\.venv\Scripts\pythonw.exe "Multi Claude.pyw"`.
 
 ```
 Multi Claude.pyw        application source
@@ -110,7 +114,7 @@ LICENSE · NOTICE        GPL-3.0 license + attribution terms
 
 The website is published from the `docs/` folder by the GitHub Actions workflow in `.github/workflows/pages.yml`. In the repository settings, set **Pages → Build and deployment → Source** to **GitHub Actions**. The site detects the visitor's browser language on first visit, falls back to English when it is not supported, and also provides a manual language selector.
 
-Screenshots in `docs/img/<language>/` are captured from the real app with fictional profiles. They follow the selected website language and fall back to English if an image is unavailable. The README always uses English screenshots. To regenerate all ten sets on Windows with Pillow installed, run `python recursos/capture_screenshots.py` (or append language codes to regenerate specific sets). The capture tool uses a temporary database and disables Claude discovery, process monitoring and registry restoration.
+Screenshots in `docs/img/<language>/` show fictional profiles. They follow the selected website language and fall back to English if an image is unavailable. To regenerate them on Windows with Pillow installed, run `python recursos/capture_screenshots.py` (or append language codes). The capture tool uses a temporary database and disables Claude discovery and status polling.
 
 ## 📄 License & credits
 

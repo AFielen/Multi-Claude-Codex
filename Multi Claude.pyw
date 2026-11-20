@@ -19,13 +19,7 @@ Cada perfil usa uma pasta de dados própria (--user-data-dir), então o login
 de um não interfere no outro. Os perfis ficam salvos em perfis.db (SQLite) e
 as fotos de perfil na pasta profile_pictures (qualquer imagem lá vira opção).
 
-Login: o navegador devolve o login por um link claude://. O Claude da Microsoft
-Store registra esse protocolo no próprio pacote, então o Windows sempre manda o
-link para o Claude principal: ele inicia um Claude.exe passageiro com o link na
-linha de comando. Durante o "modo login" o programa vigia os processos novos,
-lê esse link, encerra o processo passageiro (para o Claude principal não abrir)
-e entrega o link ao Claude do perfil. Como alternativa manual, dá para copiar o
-link claude:// (área de transferência) ou usar o botão "Colar link".
+Login: o usuário pode colar o link do navegador no diálogo do perfil escolhido.
 """
 import contextlib
 import ctypes
@@ -33,17 +27,18 @@ import ctypes.wintypes as wt
 import hashlib
 import json
 import os
-import queue
 import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
-import threading
+import tempfile
 import time
 import tkinter as tk
 import webbrowser
 import winreg
+from pathlib import Path
 from tkinter import filedialog
 
 try:
@@ -57,6 +52,7 @@ AUTOR = "Richard KPL"
 GITHUB = "https://github.com/RichardKPL"
 REPO = "https://github.com/RichardKPL/multi-claude"
 COPYRIGHT = f"© 2026 {AUTOR}"
+ATRIBUICAO = "Based on Multi Claude, created by Richard KPL"
 
 CONGELADO = getattr(sys, "frozen", False)
 PASTA_APP = os.path.dirname(sys.executable if CONGELADO else os.path.abspath(__file__))
@@ -71,7 +67,6 @@ ICONE = os.path.join(RECURSOS, "recursos", "icone.ico")
 ICONE_PNG = os.path.join(RECURSOS, "recursos", "icone.png")
 EXT_IMAGEM = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".tif", ".tiff")
 LOGIN_TIMEOUT = 300  # segundos esperando o login
-LINK_LOGIN = re.compile(r"^claude://(login/|claude\.ai/(magic-link|sso-callback|login)|.*[?&#](code|token)=)")
 FONTE = "Segoe UI"
 
 # ---------- temas ----------
@@ -158,10 +153,9 @@ T = {
         conectado="Conectado", desconectado="Sem login", aberto="Aberto", fechado="Fechado",
         aguard="Aguardando login…", abrir="Abrir", fechar="Fechar", entrar="Entrar", sair="Sair da conta",
         renomear="Renomear", pasta="Pasta de dados", excluir="Excluir", erro="Erro", foto="Foto de perfil",
-        aguardando="Login em “{n}”: na janela do Claude, clique em “Continuar com Google” e escolha a conta. "
-                   "Se o navegador perguntar, clique em “Abrir Claude”. O resto é automático.",
+        aguardando="Inicie sessão no Claude para “{n}”. Se o navegador oferecer um link de retorno, copie-o e use “Colar link” aqui.",
         colar="Colar link", cancelar="Cancelar", colar_pergunta="Cole o link claude:// do navegador:",
-        invalido="O link precisa começar com claude://",
+        invalido="Cole o link de retorno completo fornecido pelo Claude para este perfil.",
         enviado="✓ Login enviado para “{n}”.", esgotado="Tempo de login esgotado. Tente “Entrar” de novo.",
         novo_pergunta="Nome do perfil (ex.: Conta Trabalho):", existe="Já existe um perfil com esse nome.",
         renomear_pergunta="Novo nome:", excluir_q="Excluir o perfil “{n}”?",
@@ -181,10 +175,9 @@ T = {
         conectado="Signed in", desconectado="Not signed in", aberto="Open", fechado="Closed",
         aguard="Waiting for sign-in…", abrir="Open", fechar="Close", entrar="Sign in", sair="Sign out",
         renomear="Rename", pasta="Data folder", excluir="Delete", erro="Error", foto="Profile picture",
-        aguardando="Signing in to “{n}”: in the Claude window, click “Continue with Google” and pick the account. "
-                   "If the browser asks, click “Open Claude”. The rest is automatic.",
+        aguardando="Sign in to Claude for “{n}”. If your browser offers a return link, copy it and use “Paste link” here.",
         colar="Paste link", cancelar="Cancel", colar_pergunta="Paste the claude:// link from the browser:",
-        invalido="The link must start with claude://",
+        invalido="Paste the complete sign-in return link provided by Claude for this profile.",
         enviado="✓ Sign-in sent to “{n}”.", esgotado="Sign-in timed out. Try “Sign in” again.",
         novo_pergunta="Profile name (e.g. Work account):", existe="A profile with that name already exists.",
         renomear_pergunta="New name:", excluir_q="Delete profile “{n}”?",
@@ -205,10 +198,9 @@ T = {
         aguard="Esperando inicio de sesión…", abrir="Abrir", fechar="Cerrar", entrar="Iniciar sesión",
         sair="Cerrar sesión", renomear="Renombrar", pasta="Carpeta de datos", excluir="Eliminar", erro="Error",
         foto="Foto de perfil",
-        aguardando="Iniciando sesión en “{n}”: en la ventana de Claude, haz clic en “Continuar con Google” y elige la cuenta. "
-                   "Si el navegador pregunta, haz clic en “Abrir Claude”. El resto es automático.",
+        aguardando="Inicia sesión en Claude para «{n}». Si el navegador ofrece un enlace de retorno, cópialo y usa «Pegar enlace» aquí.",
         colar="Pegar enlace", cancelar="Cancelar", colar_pergunta="Pega el enlace claude:// del navegador:",
-        invalido="El enlace debe empezar con claude://",
+        invalido="Pega el enlace de retorno completo que Claude proporciona para este perfil.",
         enviado="✓ Sesión enviada a “{n}”.", esgotado="Se agotó el tiempo. Prueba “Iniciar sesión” de nuevo.",
         novo_pergunta="Nombre del perfil (ej.: Cuenta Trabajo):", existe="Ya existe un perfil con ese nombre.",
         renomear_pergunta="Nuevo nombre:", excluir_q="¿Eliminar el perfil “{n}”?",
@@ -229,10 +221,9 @@ T = {
         aguard="En attente de connexion…", abrir="Ouvrir", fechar="Fermer", entrar="Se connecter",
         sair="Se déconnecter", renomear="Renommer", pasta="Dossier de données", excluir="Supprimer",
         erro="Erreur", foto="Photo de profil",
-        aguardando="Connexion à « {n} » : dans la fenêtre de Claude, cliquez sur « Continuer avec Google » et choisissez le compte. "
-                   "Si le navigateur demande, cliquez sur « Ouvrir Claude ». Le reste est automatique.",
+        aguardando="Connectez-vous à Claude pour « {n} ». Si le navigateur propose un lien de retour, copiez-le et cliquez ici sur « Coller le lien ».",
         colar="Coller le lien", cancelar="Annuler", colar_pergunta="Collez le lien claude:// du navigateur :",
-        invalido="Le lien doit commencer par claude://",
+        invalido="Collez le lien de retour complet fourni par Claude pour ce profil.",
         enviado="✓ Connexion envoyée à « {n} ».", esgotado="Délai dépassé. Réessayez « Se connecter ».",
         novo_pergunta="Nom du profil (ex. : Compte travail) :", existe="Un profil porte déjà ce nom.",
         renomear_pergunta="Nouveau nom :", excluir_q="Supprimer le profil « {n} » ?",
@@ -252,10 +243,9 @@ T = {
         conectado="Angemeldet", desconectado="Nicht angemeldet", aberto="Geöffnet", fechado="Geschlossen",
         aguard="Warte auf Anmeldung…", abrir="Öffnen", fechar="Schließen", entrar="Anmelden", sair="Abmelden",
         renomear="Umbenennen", pasta="Datenordner", excluir="Löschen", erro="Fehler", foto="Profilbild",
-        aguardando="Anmeldung bei „{n}“: Klicke im Claude-Fenster auf „Mit Google fortfahren“ und wähle das Konto. "
-                   "Wenn der Browser fragt, klicke auf „Claude öffnen“. Der Rest geht automatisch.",
+        aguardando="Melde dich für „{n}“ in Claude an. Wenn der Browser einen Rückkehrlink anbietet, kopiere ihn und wähle hier „Link einfügen“.",
         colar="Link einfügen", cancelar="Abbrechen", colar_pergunta="Füge den claude://-Link aus dem Browser ein:",
-        invalido="Der Link muss mit claude:// beginnen",
+        invalido="Füge den vollständigen Rückkehrlink ein, den Claude für die Anmeldung mit diesem Profil anbietet.",
         enviado="✓ Anmeldung an „{n}“ gesendet.", esgotado="Zeit abgelaufen. Versuche „Anmelden“ erneut.",
         novo_pergunta="Profilname (z. B. Arbeitskonto):", existe="Ein Profil mit diesem Namen existiert bereits.",
         renomear_pergunta="Neuer Name:", excluir_q="Profil „{n}“ löschen?",
@@ -275,10 +265,9 @@ T = {
         conectado="Connesso", desconectado="Non connesso", aberto="Aperto", fechado="Chiuso",
         aguard="In attesa di accesso…", abrir="Apri", fechar="Chiudi", entrar="Accedi", sair="Esci dall'account",
         renomear="Rinomina", pasta="Cartella dati", excluir="Elimina", erro="Errore", foto="Foto profilo",
-        aguardando="Accesso a “{n}”: nella finestra di Claude, fai clic su “Continua con Google” e scegli l'account. "
-                   "Se il browser lo chiede, fai clic su “Apri Claude”. Il resto è automatico.",
+        aguardando="Accedi a Claude per «{n}». Se il browser offre un link di ritorno, copialo e scegli «Incolla link» qui.",
         colar="Incolla link", cancelar="Annulla", colar_pergunta="Incolla il link claude:// dal browser:",
-        invalido="Il link deve iniziare con claude://",
+        invalido="Incolla il link di ritorno completo fornito da Claude per questo profilo.",
         enviado="✓ Accesso inviato a “{n}”.", esgotado="Tempo scaduto. Riprova “Accedi”.",
         novo_pergunta="Nome del profilo (es.: Account lavoro):", existe="Esiste già un profilo con questo nome.",
         renomear_pergunta="Nuovo nome:", excluir_q="Eliminare il profilo “{n}”?",
@@ -298,10 +287,9 @@ T = {
         conectado="Вход выполнен", desconectado="Не выполнен вход", aberto="Открыт", fechado="Закрыт",
         aguard="Ожидание входа…", abrir="Открыть", fechar="Закрыть", entrar="Войти", sair="Выйти",
         renomear="Переименовать", pasta="Папка данных", excluir="Удалить", erro="Ошибка", foto="Фото профиля",
-        aguardando="Вход в «{n}»: в окне Claude нажмите «Продолжить с Google» и выберите аккаунт. "
-                   "Если браузер спросит, нажмите «Открыть Claude». Остальное — автоматически.",
+        aguardando="Войдите в Claude для профиля «{n}». Если браузер предложит ссылку для возврата, скопируйте её и нажмите здесь «Вставить ссылку».",
         colar="Вставить ссылку", cancelar="Отмена", colar_pergunta="Вставьте ссылку claude:// из браузера:",
-        invalido="Ссылка должна начинаться с claude://",
+        invalido="Вставьте полную ссылку для возврата в Claude для этого профиля.",
         enviado="✓ Вход отправлен в «{n}».", esgotado="Время вышло. Попробуйте «Войти» снова.",
         novo_pergunta="Имя профиля (напр.: Рабочий):", existe="Профиль с таким именем уже есть.",
         renomear_pergunta="Новое имя:", excluir_q="Удалить профиль «{n}»?",
@@ -321,10 +309,9 @@ T = {
         conectado="ログイン済み", desconectado="未ログイン", aberto="起動中", fechado="終了",
         aguard="ログイン待ち…", abrir="開く", fechar="閉じる", entrar="ログイン", sair="ログアウト",
         renomear="名前を変更", pasta="データフォルダー", excluir="削除", erro="エラー", foto="プロフィール画像",
-        aguardando="「{n}」にログイン：Claude ウィンドウで「Google で続行」をクリックしてアカウントを選択。"
-                   "ブラウザーに聞かれたら「Claude を開く」をクリック。あとは自動です。",
+        aguardando="「{n}」で Claude にログインしてください。ブラウザーに戻るためのリンクが表示されたら、コピーしてここで「リンクを貼り付け」を選びます。",
         colar="リンクを貼り付け", cancelar="キャンセル", colar_pergunta="ブラウザーの claude:// リンクを貼り付けてください：",
-        invalido="リンクは claude:// で始まる必要があります",
+        invalido="このプロフィールのログイン時に Claude が表示した戻り先のリンク全体を貼り付けてください。",
         enviado="✓ 「{n}」にログインを送信しました。", esgotado="時間切れです。もう一度「ログイン」してください。",
         novo_pergunta="プロフィール名（例：仕事用）：", existe="同じ名前のプロフィールがあります。",
         renomear_pergunta="新しい名前：", excluir_q="プロフィール「{n}」を削除しますか？",
@@ -344,10 +331,9 @@ T = {
         conectado="已登录", desconectado="未登录", aberto="已打开", fechado="已关闭",
         aguard="等待登录…", abrir="打开", fechar="关闭", entrar="登录", sair="退出登录",
         renomear="重命名", pasta="数据文件夹", excluir="删除", erro="错误", foto="头像",
-        aguardando="登录“{n}”：在 Claude 窗口中点击“使用 Google 继续”并选择账号。"
-                   "如果浏览器询问，点击“打开 Claude”。其余自动完成。",
+        aguardando="请为“{n}”登录 Claude。如果浏览器提供返回链接，请复制该链接并在此处选择“粘贴链接”。",
         colar="粘贴链接", cancelar="取消", colar_pergunta="粘贴浏览器中的 claude:// 链接：",
-        invalido="链接必须以 claude:// 开头",
+        invalido="请粘贴 Claude 为此资料提供的完整登录返回链接。",
         enviado="✓ 已将登录发送到“{n}”。", esgotado="登录超时，请重新点击“登录”。",
         novo_pergunta="配置名称（例如：工作账号）：", existe="已存在同名配置。",
         renomear_pergunta="新名称：", excluir_q="删除配置“{n}”？",
@@ -367,10 +353,9 @@ T = {
         conectado="로그인됨", desconectado="로그인 안 됨", aberto="열림", fechado="닫힘",
         aguard="로그인 대기 중…", abrir="열기", fechar="닫기", entrar="로그인", sair="로그아웃",
         renomear="이름 바꾸기", pasta="데이터 폴더", excluir="삭제", erro="오류", foto="프로필 사진",
-        aguardando="“{n}” 로그인: Claude 창에서 “Google로 계속”을 누르고 계정을 선택하세요. "
-                   "브라우저가 물으면 “Claude 열기”를 누르세요. 나머지는 자동입니다.",
+        aguardando="“{n}” 프로필로 Claude에 로그인하세요. 브라우저에 돌아가기 링크가 표시되면 복사한 후 여기서 “링크 붙여넣기”를 선택하세요.",
         colar="링크 붙여넣기", cancelar="취소", colar_pergunta="브라우저의 claude:// 링크를 붙여넣으세요:",
-        invalido="링크는 claude:// 로 시작해야 합니다",
+        invalido="이 프로필에 대해 Claude에서 제공한 로그인 복귀 링크 전체를 붙여넣으세요.",
         enviado="✓ “{n}”에 로그인을 보냈습니다.", esgotado="시간이 초과되었습니다. 다시 “로그인”하세요.",
         novo_pergunta="프로필 이름 (예: 업무 계정):", existe="같은 이름의 프로필이 이미 있습니다.",
         renomear_pergunta="새 이름:", excluir_q="“{n}” 프로필을 삭제할까요?",
@@ -529,6 +514,20 @@ _EXTRA = {
 for _cod, _textos in _EXTRA.items():
     T[_cod].update(_textos)
 
+for _cod, _aviso in {
+    "pt": "As pastas vinculadas, compartilhadas ou não reconhecidas são preservadas.",
+    "en": "Linked, shared and unrecognized folders are kept.",
+    "es": "Se conservan las carpetas vinculadas, compartidas o no reconocidas.",
+    "fr": "Les dossiers liés, partagés ou non reconnus sont conservés.",
+    "de": "Verknüpfte, gemeinsam genutzte und unbekannte Ordner bleiben erhalten.",
+    "it": "Le cartelle collegate, condivise o non riconosciute vengono conservate.",
+    "ru": "Связанные, общие и нераспознанные папки сохраняются.",
+    "ja": "リンク先、共有、未認識のフォルダーは保持されます。",
+    "zh": "保留关联、共享和无法识别的文件夹。",
+    "ko": "연결된 폴더, 공유 폴더 및 인식할 수 없는 폴더는 보존됩니다.",
+}.items():
+    T[_cod]["pastas_preservadas"] = _aviso
+
 
 def log(msg):
     try:
@@ -581,8 +580,29 @@ def cfg_set(chave, valor):
             con.execute("INSERT OR REPLACE INTO config VALUES (?, ?)", (chave, valor))
 
 
+_DISPOSITIVO = re.compile(r"(?:CON(?:IN\$|OUT\$)?|PRN|AUX|NUL|(?:COM|LPT)[0-9¹²³])(?:\.|$)", re.I)
+
+
+def caminho_local(pasta, relativo=False):
+    """Valida texto antes de consultar o Windows. O banco portátil também usa caminhos relativos."""
+    if not isinstance(pasta, str) or not pasta:
+        return False
+    disco, resto = os.path.splitdrive(pasta)
+    if disco:
+        if not re.fullmatch("[A-Za-z]:", disco) or not resto.startswith(("\\", "/")):
+            return False
+    elif not relativo or resto.startswith(("\\", "/")):
+        return False
+    if re.search(r'[<>:"|?*\x00-\x1f]', resto):
+        return False
+    return all(not parte.endswith((" ", ".")) and not _DISPOSITIVO.match(parte)
+               for parte in re.split(r"[\\/]", resto) if parte not in ("", ".", ".."))
+
+
 def caminho_real(pasta, base=None):
     """Pastas dentro da pasta do programa ficam salvas como relativas (portátil)."""
+    if not caminho_local(pasta, relativo=True):
+        return ""
     return os.path.normpath(pasta if os.path.isabs(pasta) else os.path.join(base or BASE, pasta))
 
 
@@ -599,84 +619,227 @@ def caminho_salvo(pasta):
 
 # ---------- perfis existentes na máquina ----------
 
-def protegidas():
-    """Pastas que nunca são tratadas como perfil (dados do Claude principal, pastas do usuário)."""
-    loc, roam, casa = os.environ.get("LOCALAPPDATA", ""), os.environ.get("APPDATA", ""), os.path.expanduser("~")
-    fixas = [os.path.join(roam, "Claude"), os.path.join(loc, "AnthropicClaude"), casa, BASE, DADOS, FOTOS]
-    for raiz in (os.path.join(loc, "Claude-Data"), os.path.join(loc, "Packages")):
-        try:
-            fixas += [os.path.join(raiz, n) for n in os.listdir(raiz) if "claude" in n.lower()]
-        except OSError:
-            pass
-    fixas.append(os.path.join(loc, "Claude-Data"))
-    return {normalizar(p) for p in fixas if p}
+def dentro_de(pasta, raiz):
+    return bool(pasta and raiz) and (pasta == raiz or pasta.startswith(os.path.join(raiz, "")))
+
+
+def inspecionar_caminho(pasta, resolver_links=False, limite=12):
+    """Inspeciona os componentes a partir da raiz antes de acessar qualquer filho de uma junção."""
+    if not caminho_local(pasta):
+        return None
+    partes = Path(os.path.normpath(pasta)).parts
+    caminho = ""
+    try:
+        for indice, parte in enumerate(partes):
+            caminho = os.path.join(caminho, parte)
+            try:
+                info = os.lstat(caminho)
+            except FileNotFoundError:
+                break
+            reparse = getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+            if stat.S_ISLNK(info.st_mode) or reparse:
+                if not resolver_links or not limite:
+                    return None
+                destino = os.readlink(caminho)
+                if destino.startswith("\\\\?\\"):
+                    destino = destino[4:]
+                    if not caminho_local(destino):
+                        return None
+                if not caminho_local(destino, relativo=True):
+                    return None
+                alvo = os.path.join(os.path.dirname(caminho), destino, *partes[indice + 1:])
+                return inspecionar_caminho(alvo, True, limite - 1)
+        return normalizar(os.path.realpath(pasta)) if resolver_links else normalizar(pasta)
+    except (OSError, ValueError):
+        return None
+
+
+def caminho_sem_desvios(pasta):
+    return inspecionar_caminho(pasta) is not None
+
+
+def identidade_pasta(pasta):
+    return inspecionar_caminho(pasta, resolver_links=True)
+
+
+def pasta_protegida(pasta):
+    n = identidade_pasta(pasta)
+    if not n:
+        return True
+    # Também protege pastas que contêm o programa e a pasta pessoal.
+    if any(dentro_de(identidade_pasta(p), n) for p in (BASE, DADOS, FOTOS, os.path.expanduser("~"))):
+        return True
+    loc = os.environ.get("LOCALAPPDATA")
+    roam = os.environ.get("APPDATA")
+    raizes = [FOTOS]
+    if roam:
+        raizes.append(os.path.join(roam, "Claude"))
+    if loc:
+        raizes.extend(os.path.join(loc, nome) for nome in ("AnthropicClaude", "Claude", "Claude-Data"))
+        pacotes = identidade_pasta(os.path.join(loc, "Packages"))
+        if dentro_de(n, pacotes) and "claude" in os.path.relpath(n, pacotes).split(os.sep)[0].lower():
+            return True
+    return any(dentro_de(n, identidade_pasta(p)) for p in raizes)
 
 
 def eh_perfil_claude(pasta):
-    return (os.path.isfile(os.path.join(pasta, "config.json"))
-            and os.path.exists(os.path.join(pasta, "Local State"))
-            and normalizar(pasta) not in protegidas())
+    if not caminho_sem_desvios(pasta) or pasta_protegida(pasta):
+        return False
+    for nome in ("config.json", "Local State"):
+        arquivo = os.path.join(pasta, nome)
+        if not caminho_sem_desvios(arquivo) or not os.path.isfile(arquivo):
+            return False
+    return True
+
+
+def validar_pasta_para_abrir(pasta):
+    if caminho_sem_desvios(pasta) and not pasta_protegida(pasta):
+        if os.path.dirname(normalizar(pasta)) == normalizar(DADOS) or eh_perfil_claude(pasta):
+            return
+    raise OSError(f"Invalid profile folder: {pasta}")
 
 
 def detectar_perfis(registradas):
     """Pastas de perfil do Claude na máquina que ainda não estão cadastradas."""
     candidatas = []
     for raiz in (DADOS, os.path.join(os.path.expanduser("~"), "ClaudePerfis")):
+        if not caminho_sem_desvios(raiz):
+            continue
         try:
             candidatas += [os.path.join(raiz, n) for n in os.listdir(raiz)]
         except OSError:
             pass
     candidatas += list(claudes_abertos_caminhos())
-    vistas, achadas = set(registradas), []
+    vistas, achadas = {identidade_pasta(p) for p in registradas}, []
     for c in candidatas:
-        n = normalizar(c)
-        if n in vistas or not os.path.isdir(c) or not eh_perfil_claude(c):
+        n = identidade_pasta(c)
+        if not n or n in vistas or not eh_perfil_claude(c):
             continue
         vistas.add(n)
         achadas.append(c)
     return achadas
 
 
-def pasta_segura_para_apagar(pasta):
-    n = normalizar(pasta)
-    if n in protegidas() or len(n) < 8:
-        return False
-    return n.startswith(normalizar(DADOS) + os.sep) or eh_perfil_claude(pasta)
+def identidade_para_apagar(perfil, perfis):
+    """Só pastas diretas em dados, exclusivas deste cadastro, podem ser apagadas."""
+    id_perfil, _, pasta, _ = perfil
+    if os.path.dirname(normalizar(pasta)) != normalizar(DADOS) or not caminho_sem_desvios(pasta):
+        return None
+    alvo = identidade_pasta(pasta)
+    if not alvo:
+        return None
+    for outro_id, _, outra, _ in perfis:
+        if outro_id != id_perfil:
+            outra = identidade_pasta(outra)
+            if dentro_de(alvo, outra) or dentro_de(outra, alvo):
+                return None
+    try:
+        info = os.lstat(pasta)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(info.st_mode) or pasta_protegida(pasta):
+        return None
+    identidade = f"{info.st_dev}:{info.st_ino}"
+    pendente = cfg_get(f"apagar_perfil_{id_perfil}")
+    if pendente:
+        return identidade if pendente == identidade else None
+    return identidade if eh_perfil_claude(pasta) else None
+
+
+def apagar_pasta_perfil(perfil, listar_perfis, identidade):
+    pasta = perfil[2]
+    fechar_claude(pasta)
+    perfis = listar_perfis()
+    if perfil not in perfis or identidade_para_apagar(perfil, perfis) != identidade:
+        raise OSError(pasta)
+    # Uma tentativa parcial pode ter removido os arquivos marcadores do Claude.
+    cfg_set(f"apagar_perfil_{perfil[0]}", identidade)
+    shutil.rmtree(pasta)
 
 
 # ---------- fotos de perfil ----------
 
 def preparar_fotos():
     """Cria profile_pictures e, no .exe, copia as fotos padrão embutidas que faltarem."""
+    if not caminho_sem_desvios(FOTOS):
+        return
     os.makedirs(FOTOS, exist_ok=True)
     embutidas = os.path.join(RECURSOS, "profile_pictures")
-    if os.path.normcase(embutidas) != os.path.normcase(FOTOS) and os.path.isdir(embutidas):
+    if (os.path.normcase(embutidas) != os.path.normcase(FOTOS)
+            and caminho_sem_desvios(embutidas) and os.path.isdir(embutidas)):
         for nome in os.listdir(embutidas):
             destino = os.path.join(FOTOS, nome)
-            if not os.path.exists(destino):
-                shutil.copy2(os.path.join(embutidas, nome), destino)
+            origem = os.path.join(embutidas, nome)
+            if (nome.lower().endswith(EXT_IMAGEM) and not nome.startswith("usuario_")
+                    and not os.path.lexists(destino) and caminho_sem_desvios(origem) and os.path.isfile(origem)):
+                with open(origem, "rb") as fonte, open(destino, "xb") as copia:
+                    shutil.copyfileobj(fonte, copia)
 
 
 def listar_fotos():
     """Todas as imagens da pasta profile_pictures (as do app primeiro, as do usuário no fim)."""
+    if not caminho_sem_desvios(FOTOS):
+        return []
     try:
-        nomes = [n for n in os.listdir(FOTOS) if n.lower().endswith(EXT_IMAGEM)]
+        nomes = [n for n in os.listdir(FOTOS) if foto_disponivel(n)]
     except OSError:
         return []
     return sorted(nomes, key=lambda n: (n.startswith("usuario_"), n.lower()))
 
 
+def foto_disponivel(nome):
+    if (not isinstance(nome, str) or "\x00" in nome or ":" in nome
+            or nome != os.path.basename(nome) or not nome.lower().endswith(EXT_IMAGEM)):
+        return False
+    caminho = os.path.join(FOTOS, nome)
+    return caminho_sem_desvios(caminho) and os.path.isfile(caminho)
+
+
+def importar_banco(app, arquivo):
+    if not caminho_sem_desvios(arquivo):
+        raise OSError(f"Invalid database path: {arquivo}")
+    with contextlib.closing(sqlite3.connect(Path(arquivo).absolute().as_uri() + "?mode=ro", uri=True)) as origem:
+        colunas = [c[1] for c in origem.execute("PRAGMA table_info(perfis)")]
+        fotos = "foto" if "foto" in colunas else "NULL"
+        linhas = origem.execute(f"SELECT nome, pasta, {fotos} FROM perfis").fetchall()
+    registradas = {identidade_pasta(p[2]) for p in app.perfis()}
+    n = 0
+    with db() as con:
+        for nome, pasta, foto in linhas:
+            if not isinstance(nome, str) or not nome.strip() or not isinstance(pasta, str) or not pasta.strip():
+                continue
+            if "\x00" in nome or "\x00" in pasta:
+                continue
+            pasta = caminho_real(pasta, os.path.dirname(arquivo))
+            if not eh_perfil_claude(pasta):
+                continue
+            chave = identidade_pasta(pasta)
+            if chave in registradas:
+                continue
+            app._inserir(con, app.nome_livre(con, nome), pasta, foto if foto_disponivel(foto) else None)
+            registradas.add(chave)
+            n += 1
+    return n
+
+
 def importar_foto(caminho):
     """Copia uma imagem escolhida pelo usuário para profile_pictures (recortada em quadrado)."""
-    img = Image.open(caminho)
-    img = img.convert("RGBA") if img.mode in ("RGBA", "LA", "P") else img.convert("RGB")
+    if not caminho_sem_desvios(FOTOS):
+        raise OSError(f"Invalid gallery folder: {FOTOS}")
+    with Image.open(caminho) as original:
+        img = original.convert("RGBA" if original.mode in ("RGBA", "LA", "P") else "RGB")
     lado = min(img.size)
     x, y = (img.width - lado) // 2, (img.height - lado) // 2
     img = img.crop((x, y, x + lado, y + lado)).resize((512, 512), Image.LANCZOS)
     base = re.sub(r"[^\w-]+", "_", os.path.splitext(os.path.basename(caminho))[0]).strip("_")[:40] or "foto"
-    nome = f"usuario_{base}_{int(time.time())}.png"
-    img.save(os.path.join(FOTOS, nome))
-    return nome
+    fd, destino = tempfile.mkstemp(dir=FOTOS, prefix=f"usuario_{base}_", suffix=".png")
+    try:
+        with os.fdopen(fd, "wb") as arquivo:
+            img.save(arquivo, format="PNG")
+    except BaseException:
+        os.remove(destino)
+        raise
+    return os.path.basename(destino)
 
 
 _cache_img = {}
@@ -684,7 +847,7 @@ _cache_img = {}
 
 def avatar(foto, tam, fundo):
     """PhotoImage redondo da foto (ou None se não der). Fica em cache."""
-    if not Image or not foto:
+    if not Image or not foto_disponivel(foto):
         return None
     caminho = os.path.join(FOTOS, foto)
     try:
@@ -737,22 +900,23 @@ def achar_claude():
         return p
     try:
         loc = subprocess.check_output(
-            ["powershell", "-NoProfile", "-Command", "(Get-AppxPackage Claude).InstallLocation"],
-            text=True, creationflags=subprocess.CREATE_NO_WINDOW,
+            [os.path.join(os.environ["SystemRoot"], "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+             "-NoProfile", "-NonInteractive", "-Command", "(Get-AppxPackage Claude).InstallLocation"],
+            text=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=8,
         ).strip()
-        exe = os.path.join(loc, "app", "claude.exe")
-        if os.path.exists(exe):
-            return exe
+        if os.path.isabs(loc):
+            exe = os.path.join(loc, "app", "claude.exe")
+            if os.path.isfile(exe):
+                return exe
     except Exception:
         pass
     return None
 
 
 def abrir_claude(claude, pasta, url=None):
-    args = [claude]
-    if pasta:
-        os.makedirs(pasta, exist_ok=True)
-        args.append(f"--user-data-dir={pasta}")
+    validar_pasta_para_abrir(pasta)
+    os.makedirs(pasta, exist_ok=True)
+    args = [claude, f"--user-data-dir={pasta}"]
     if url:
         args.append(url)
     subprocess.Popen(args)
@@ -760,79 +924,68 @@ def abrir_claude(claude, pasta, url=None):
 
 def esta_logado(pasta):
     """Lê a última transição de login no log do Claude do perfil."""
+    if not pasta or not caminho_sem_desvios(pasta):
+        return False
     try:
-        with open(os.path.join(pasta, "logs", "main.log"), "rb") as f:
+        diario = os.path.join(pasta, "logs", "main.log")
+        if not caminho_sem_desvios(diario):
+            return False
+        with open(diario, "rb") as f:
             f.seek(0, 2)
             f.seek(max(0, f.tell() - 2_000_000))
             texto = f.read().decode("utf8", "replace")
     except OSError:
-        return False
+        texto = ""
     m = re.findall(r"Login-state transition \(loggedOut: \w+ → (\w+)", texto)
     if m:
         return m[-1] == "false"
     try:
-        with open(os.path.join(pasta, "config.json"), encoding="utf8") as f:
-            return bool(json.load(f).get("lastKnownAccountUuid"))
+        cfg = os.path.join(pasta, "config.json")
+        if not caminho_sem_desvios(cfg):
+            return False
+        with open(cfg, encoding="utf8") as f:
+            config = json.load(f)
+            return isinstance(config, dict) and bool(config.get("lastKnownAccountUuid"))
     except (OSError, ValueError):
         return False
 
 
 def deslogar(pasta):
     """Apaga cookies e tokens do perfil (o Claude dele precisa estar fechado)."""
-    for rel in (r"Network\Cookies", r"Network\Cookies-journal"):
-        try:
-            os.remove(os.path.join(pasta, rel))
-        except OSError:
-            pass
     cfg = os.path.join(pasta, "config.json")
+    diario = os.path.join(pasta, "logs", "main.log")
+    cookies = [os.path.join(pasta, "Network", nome)
+               for nome in ("Cookies", "Cookies-journal", "Cookies-wal", "Cookies-shm")]
+    for arquivo in [cfg, diario, *cookies]:
+        if not caminho_sem_desvios(arquivo):
+            raise OSError(f"Profile path is redirected: {arquivo}")
+    if os.path.isfile(diario) and os.stat(diario).st_nlink > 1:
+        raise OSError(f"Shared profile log: {diario}")
     try:
         with open(cfg, encoding="utf8") as f:
             d = json.load(f)
-        for k in [k for k in d if k.startswith("oauth:") or k == "lastKnownAccountUuid"]:
-            del d[k]
-        with open(cfg, "w", encoding="utf8") as f:
-            json.dump(d, f, indent=2)
-    except (OSError, ValueError):
-        pass
-    # Marca no log do perfil, para o status ficar "sem login" até o próximo login.
-    try:
-        with open(os.path.join(pasta, "logs", "main.log"), "a", encoding="utf8") as f:
+    except FileNotFoundError:
+        d = {}
+    if not isinstance(d, dict):
+        raise ValueError(f"Invalid profile configuration: {cfg}")
+    for arquivo in cookies:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(arquivo)
+    limpo = {k: v for k, v in d.items() if not k.startswith("oauth:") and k != "lastKnownAccountUuid"}
+    if limpo != d:
+        with tempfile.NamedTemporaryFile(dir=pasta, delete=False) as tmp:
+            temporario = tmp.name
+        try:
+            with open(temporario, "w", encoding="utf8") as f:
+                json.dump(limpo, f, indent=2)
+            os.replace(temporario, cfg)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(temporario)
+    if os.path.isfile(diario):
+        with open(diario, "a", encoding="utf8") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [info] [multi-claude] "
                     "Login-state transition (loggedOut: false → true)\n")
-    except OSError:
-        pass
-
-
-def devolver_registros():
-    """Versões antigas assumiam o claude:// e o navegador padrão; devolve o original."""
-    try:
-        orig = cfg_get("handler_original")
-        cmd = r"Software\Classes\claude\shell\open\command"
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cmd) as k:
-            atual = winreg.QueryValueEx(k, "")[0]
-        if orig and "--link" in atual:
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, cmd) as k:
-                winreg.SetValueEx(k, "", 0, winreg.REG_SZ, orig)
-    except OSError:
-        pass
-    progid = cfg_get("nav_progid")
-    if progid:
-        base = rf"Software\Classes\{progid}"
-        hkcu = cfg_get("nav_hkcu")
-        try:
-            if hkcu:
-                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, base + r"\shell\open\command") as k:
-                    winreg.SetValueEx(k, "", 0, winreg.REG_SZ, hkcu)
-            else:
-                for sub in (r"\shell\open\command", r"\shell\open", r"\shell", ""):
-                    try:
-                        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, base + sub)
-                    except OSError:
-                        break
-            for c in ("nav_progid", "nav_hkcu"):
-                cfg_set(c, None)
-        except OSError:
-            pass
 
 
 # ----- processos -----
@@ -858,7 +1011,7 @@ def pids_por_nome(nome):
     snap = _k32.CreateToolhelp32Snapshot(2, 0)  # TH32CS_SNAPPROCESS
     pids = set()
     if not snap or snap == wt.HANDLE(-1).value:
-        return pids
+        raise ctypes.WinError(ctypes.get_last_error())
     try:
         e = _PE32()
         e.dwSize = ctypes.sizeof(e)
@@ -867,6 +1020,8 @@ def pids_por_nome(nome):
             if e.szExeFile.lower() == nome:
                 pids.add(e.th32ProcessID)
             ok = _k32.Process32NextW(wt.HANDLE(snap), ctypes.byref(e))
+        if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+            raise ctypes.WinError(ctypes.get_last_error())
     finally:
         _k32.CloseHandle(wt.HANDLE(snap))
     return pids
@@ -888,33 +1043,45 @@ def linha_de_comando(pid):
         _k32.CloseHandle(wt.HANDLE(h))
 
 
-def encerrar_processo(pid):
-    h = _k32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
-    if not h:
-        return False
-    try:
-        return bool(_k32.TerminateProcess(wt.HANDLE(h), 0))
-    finally:
-        _k32.CloseHandle(wt.HANDLE(h))
-
-
 def normalizar(pasta):
     return os.path.normcase(os.path.normpath(pasta))
 
 
-def _claudes_com_pasta():
+def _claudes_com_pasta(estrito=False):
+    separar = ctypes.windll.shell32.CommandLineToArgvW
+    separar.argtypes = (wt.LPCWSTR, ctypes.POINTER(ctypes.c_int))
+    separar.restype = ctypes.POINTER(wt.LPWSTR)
+    indeterminados = set()
     for pid in pids_por_nome("claude.exe"):
         cmd = linha_de_comando(pid)
-        if "--type=" in cmd:
+        if not cmd:
+            indeterminados.add(pid)
             continue
-        m = re.search(r'--user-data-dir="?([^"]+?)"?(?:\s|$)', cmd)
-        if m:
-            yield pid, m.group(1)
+        if "--user-data-dir=" not in cmd:
+            continue
+        n = ctypes.c_int()
+        argv = separar(cmd, ctypes.byref(n))
+        if not argv:
+            indeterminados.add(pid)
+            continue
+        try:
+            args = argv[1:n.value]
+        finally:
+            _k32.LocalFree(ctypes.cast(argv, wt.HLOCAL))
+        if any(a.startswith("--type=") for a in args):
+            continue
+        pastas = [a.split("=", 1)[1] for a in args if a.startswith("--user-data-dir=")]
+        if len(pastas) == 1 and os.path.isabs(pastas[0]):
+            yield pid, pastas[0]
+        elif pastas:
+            indeterminados.add(pid)
+    if estrito and indeterminados and indeterminados.intersection(pids_por_nome("claude.exe")):
+        raise OSError("Close Claude Desktop before changing profile data. Windows could not verify all running instances.")
 
 
-def claudes_abertos():
+def claudes_abertos(estrito=False):
     """{pasta do perfil normalizada: pid do processo principal} dos Claude abertos com --user-data-dir."""
-    return {normalizar(pasta): pid for pid, pasta in _claudes_com_pasta()}
+    return {normalizar(pasta): pid for pid, pasta in _claudes_com_pasta(estrito)}
 
 
 def claudes_abertos_caminhos():
@@ -922,46 +1089,19 @@ def claudes_abertos_caminhos():
 
 
 def fechar_claude(pasta):
-    pid = claudes_abertos().get(normalizar(pasta))
+    pid = claudes_abertos(estrito=True).get(normalizar(pasta))
     if pid:
-        # Fecha a árvore toda (renderer, GPU etc. junto com o principal).
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                       creationflags=subprocess.CREATE_NO_WINDOW)
+        # Solicita fechamento normal para o Electron terminar as gravações pendentes.
+        taskkill = os.path.join(os.environ["SystemRoot"], "System32", "taskkill.exe")
+        resultado = subprocess.run([taskkill, "/PID", str(pid)], capture_output=True,
+                                   creationflags=subprocess.CREATE_NO_WINDOW)
         for _ in range(30):
-            if normalizar(pasta) not in claudes_abertos():
+            if normalizar(pasta) not in claudes_abertos(estrito=True):
+                return
+            if resultado.returncode:
                 break
             time.sleep(0.1)
-        log(f"Claude do perfil fechado ({pasta})")
-
-
-class VigiaProcessos:
-    """Procura, em Claude.exe novos, um link de login claude:// e o entrega via `aviso`.
-
-    Quando o navegador abre claude://..., o Windows inicia um Claude.exe novo com o
-    link na linha de comando; ele vive por um instante, repassa ao Claude principal
-    e fecha. Lemos a linha de comando dele e o encerramos antes que repasse.
-    """
-
-    def __init__(self, aviso, nome="claude.exe"):
-        self.aviso, self.nome, self.parar = aviso, nome, False
-        threading.Thread(target=self._rodar, daemon=True).start()
-
-    def _rodar(self):
-        vistos = pids_por_nome(self.nome)
-        log(f"vigia de processos ligado ({len(vistos)} {self.nome} já abertos)")
-        while not self.parar:
-            atuais = pids_por_nome(self.nome)
-            for pid in atuais - vistos:
-                cmd = linha_de_comando(pid)
-                for url in re.findall(r"claude://[^\"\s]+", cmd):
-                    log(f"processo {pid} abriu {url[:40]}")
-                    if LINK_LOGIN.match(url):
-                        self.parar = True
-                        log(f"processo {pid} encerrado: {encerrar_processo(pid)}")
-                        self.aviso(url)
-                        return
-            vistos = atuais
-            time.sleep(0.01)
+        raise OSError(f"Close Claude Desktop for this profile and try again.\n{pasta}")
 
 
 # ---------- bandeiras ----------
@@ -1082,7 +1222,7 @@ class Janela(tk.Toplevel):
         self.focus_force()
 
 
-def dialogo(app, titulo, msg, entrada=None, botoes=None):
+def dialogo(app, titulo, msg, entrada=None, botoes=None, ocultar=False):
     """Mostra uma mensagem; com `entrada` (texto inicial) pede um texto. Devolve o valor do botão/texto."""
     j = Janela(app, titulo)
     res = {"v": None}
@@ -1095,7 +1235,7 @@ def dialogo(app, titulo, msg, entrada=None, botoes=None):
         borda = tk.Frame(corpo, bg=C["BORDA"])
         borda.pack(fill="x", pady=(12, 0))
         campo = tk.Entry(borda, font=(FONTE, 11), bg=C["CARD"], fg=C["TEXTO"], insertbackground=C["TEXTO"],
-                         relief="flat", highlightthickness=0)
+                         relief="flat", highlightthickness=0, show="•" if ocultar else "", exportselection=False)
         campo.pack(fill="x", padx=1, pady=1, ipady=6, ipadx=6)
         campo.insert(0, entrada)
         campo.select_range(0, "end")
@@ -1112,6 +1252,8 @@ def dialogo(app, titulo, msg, entrada=None, botoes=None):
         Botao(rodape, texto, lambda v=valor: escolher(v), tipo=tipo).pack(side="right", padx=(8, 0))
     j.bind("<Return>", lambda e: escolher(botoes[0][1]))
     j.mostrar()
+    if campo is not None:
+        campo.focus_set()
     j.wait_window()
     return res["v"]
 
@@ -1124,33 +1266,33 @@ class App(tk.Tk):
         self.title(APP)
         por_icone(self)
         self.claude = achar_claude()
-        self.login_inicio = None
         self.login_perfil = None
-        self.ultimo_clip = ""
-        self.vigia = None
-        self.fila = queue.Queue()
+        self.login_timer = None
         self.estado = {}  # pasta -> (logado, aberto)
         self.layout = None  # (colunas, compacto) do último desenho
         self.primeira = cfg_get("idioma") is None
         self.lang = cfg_get("idioma") or idioma_do_windows()
         if self.lang not in T:
             self.lang = "en"
-        self.tema = cfg_get("tema") or "sistema"
+        self.tema = cfg_get("tema")
+        if self.tema not in (*TEMAS, "sistema"):
+            self.tema = "sistema"
         self.tema_efetivo = aplicar_tema(self.tema)
 
         geo = cfg_get("geometria")
-        self.geometry(geo if geo else "640x680")
+        try:
+            self.geometry(geo or "640x680")
+        except tk.TclError:
+            self.geometry("640x680")
         self.minsize(440, 480)
 
         # Sobrou modo login de uma execução anterior? Limpa.
         for c in ("login_pasta", "login_ok", "login_url"):
             cfg_set(c, None)
-        devolver_registros()
         preparar_fotos()
 
         self.montar()
         self.protocol("WM_DELETE_WINDOW", self.fechar)
-        self.after(500, self.vigiar_login)
         self.after(200, self.atualizar_estado)
         if self.primeira:
             self.after(300, self.boas_vindas)
@@ -1217,9 +1359,9 @@ class App(tk.Tk):
         # Rodapé com copyright
         rodape = tk.Frame(self, bg=C["BG"])
         rodape.pack(side="bottom", fill="x", padx=22, pady=(0, 10))
-        tk.Label(rodape, text=f"{APP} v{VERSAO}  ·  {COPYRIGHT}", bg=C["BG"], fg=C["SUB"],
+        tk.Label(rodape, text=f"{APP} v{VERSAO} · Modified edition", bg=C["BG"], fg=C["SUB"],
                  font=(FONTE, 8)).pack(side="left")
-        link = tk.Label(rodape, text="github.com/RichardKPL", bg=C["BG"], fg=C["ACCENT"], font=(FONTE, 8, "underline"),
+        link = tk.Label(rodape, text=ATRIBUICAO, bg=C["BG"], fg=C["ACCENT"], font=(FONTE, 8, "underline"),
                         cursor="hand2")
         link.pack(side="right")
         link.bind("<Button-1>", lambda e: webbrowser.open(GITHUB))
@@ -1230,7 +1372,7 @@ class App(tk.Tk):
         self.corpo.tela.bind("<Configure>", self._ao_redimensionar, add="+")
 
         self.recarregar()
-        if self.login_inicio and self.login_perfil:
+        if self.login_perfil:
             self.mostrar_status(self.t("aguardando", n=self.login_perfil[1]), True)
 
     def _layout_para(self, largura):
@@ -1287,11 +1429,12 @@ class App(tk.Tk):
         secao(self.t("sobre"))
         sobre = tk.Frame(corpo, bg=C["CARD"], highlightthickness=1, highlightbackground=C["BORDA"])
         sobre.pack(fill="x")
-        tk.Label(sobre, text=APP, bg=C["CARD"], fg=C["TEXTO"], font=(FONTE, 12, "bold"),
+        tk.Label(sobre, text=f"{APP} · Modified edition", bg=C["CARD"], fg=C["TEXTO"], font=(FONTE, 12, "bold"),
                  anchor="w").pack(fill="x", padx=14, pady=(12, 0))
         tk.Label(sobre, text=f"{self.t('versao')} {VERSAO}", bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w").pack(fill="x", padx=14)
-        tk.Label(sobre, text=f"{COPYRIGHT}. {self.t('direitos')}", bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
+        tk.Label(sobre, text=f"{ATRIBUICAO}\n{COPYRIGHT}. {self.t('direitos')}", justify="left",
+                 bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w").pack(fill="x", padx=14, pady=(6, 0))
         tk.Label(sobre, text=self.t("nao_oficial"), bg=C["CARD"], fg=C["SUB"], font=(FONTE, 9),
                  anchor="w").pack(fill="x", padx=14)
@@ -1397,8 +1540,9 @@ class App(tk.Tk):
         def listar():
             for w in rol.dentro.winfo_children():
                 w.destroy()
-            achadas = detectar_perfis({normalizar(p[2]) for p in self.perfis()}) + [
-                c for c in marcados if normalizar(c) not in {normalizar(p[2]) for p in self.perfis()}]
+            registradas = {identidade_pasta(p[2]) for p in self.perfis()}
+            achadas = detectar_perfis(registradas) + [
+                c for c in marcados if identidade_pasta(c) not in registradas]
             vistas = set()
             for pasta in achadas:
                 if normalizar(pasta) in vistas:
@@ -1445,40 +1589,26 @@ class App(tk.Tk):
                                              filetypes=[("perfis.db", "*.db"), ("*", "*.*")])
             if not arq:
                 return
-            n = 0
             try:
-                origem = sqlite3.connect(f"file:{arq}?mode=ro", uri=True)
-                cols = [c[1] for c in origem.execute("PRAGMA table_info(perfis)")]
-                linhas = origem.execute("SELECT nome, pasta" + (", foto" if "foto" in cols else ", NULL")
-                                        + " FROM perfis").fetchall()
-                origem.close()
-            except sqlite3.Error as e:
+                n = importar_banco(self, arq)
+            except (OSError, sqlite3.Error, ValueError) as e:
                 dialogo(self, self.t("erro"), str(e))
                 return
-            registradas = {normalizar(p[2]) for p in self.perfis()}
-            with db() as con:
-                for nome, pasta, foto in linhas:
-                    pasta = caminho_real(pasta, os.path.dirname(arq))
-                    if normalizar(pasta) in registradas or not eh_perfil_claude(pasta):
-                        continue
-                    if foto and not os.path.exists(os.path.join(FOTOS, foto)):
-                        foto = None
-                    self._inserir(con, self.nome_livre(con, nome), pasta, foto)
-                    registradas.add(normalizar(pasta))
-                    n += 1
             j.destroy()
             self.forcar_estado()
             dialogo(self, self.t("importar"), self.t("importados", n=n))
 
         def confirmar():
             escolhidas = [p for p, v in marcados.items() if v]
-            registradas = {normalizar(p[2]) for p in self.perfis()}
+            registradas = {identidade_pasta(p[2]) for p in self.perfis()}
             n = 0
             with db() as con:
                 for pasta in escolhidas:
-                    if normalizar(pasta) in registradas:
+                    chave = identidade_pasta(pasta)
+                    if chave in registradas or not eh_perfil_claude(pasta):
                         continue
                     self._inserir(con, self.nome_livre(con, os.path.basename(pasta.rstrip("\\/"))), pasta)
+                    registradas.add(chave)
                     n += 1
             log(f"{n} perfil(is) importado(s)")
             j.destroy()
@@ -1495,29 +1625,36 @@ class App(tk.Tk):
     # ----- zona de perigo -----
     def apagar_tudo(self):
         palavra = self.t("palavra")
-        resp = dialogo(self, self.t("apagar_tudo"), self.t("apagar_confirma", p=palavra), entrada="",
+        msg = self.t("pastas_preservadas") + "\n\n" + self.t("apagar_confirma", p=palavra)
+        resp = dialogo(self, self.t("apagar_tudo"), msg, entrada="",
                        botoes=[(self.t("apagar_tudo"), True, "primario"), (self.t("cancelar"), None, "normal")])
         if (resp or "").strip().upper() != palavra.upper():
             return
         self.cancelar_login()
-        for _, nome, pasta, _ in self.perfis():
-            fechar_claude(pasta)
-            if pasta_segura_para_apagar(pasta):
-                shutil.rmtree(pasta, ignore_errors=True)
-            else:
-                log(f"pasta não apagada por segurança: {pasta}")
-        shutil.rmtree(DADOS, ignore_errors=True)
-        for nome in listar_fotos():
-            if nome.startswith("usuario_"):
+        try:
+            perfis = self.perfis()
+            for perfil in perfis:
+                identidade = identidade_para_apagar(perfil, perfis)
+                if identidade is not None:
+                    apagar_pasta_perfil(perfil, self.perfis, identidade)
+            if caminho_sem_desvios(FOTOS):
                 try:
-                    os.remove(os.path.join(FOTOS, nome))
-                except OSError:
+                    fotos = os.listdir(FOTOS)
+                except FileNotFoundError:
+                    fotos = []
+                for nome in fotos:
+                    if nome.startswith("usuario_") and nome.lower().endswith(EXT_IMAGEM):
+                        os.remove(os.path.join(FOTOS, nome))
+            # O banco é o último arquivo removido para permitir nova tentativa.
+            for arq in (LOG, LOG + ".old", DB):
+                try:
+                    os.remove(arq)
+                except FileNotFoundError:
                     pass
-        for arq in (DB, LOG, LOG + ".old"):
-            try:
-                os.remove(arq)
-            except OSError:
-                pass
+        except (OSError, sqlite3.Error) as e:
+            dialogo(self, self.t("erro"), str(e))
+            self.forcar_estado()
+            return
         reiniciar(self)
 
     def mudar_idioma(self, cod):
@@ -1536,11 +1673,16 @@ class App(tk.Tk):
     def _inserir(self, con, nome, pasta=None, foto=None):
         """Cadastra um perfil; sem `pasta`, cria uma nova em dados/ (portátil). Devolve o id."""
         if pasta is None:
-            slug = re.sub(r"[^\w-]+", "_", nome).strip("_") or "perfil"
+            slug = re.sub(r"[^\w-]+", "_", nome).strip("_")[:80] or "perfil"
+            if _DISPOSITIVO.match(slug):
+                slug = "_" + slug
             pasta = os.path.join(DADOS, slug)
             usadas = {normalizar(caminho_real(r[0])) for r in con.execute("SELECT pasta FROM perfis")}
-            while normalizar(pasta) in usadas or os.path.exists(pasta):
-                pasta += "_"
+            sufixo = 2
+            while normalizar(pasta) in usadas or os.path.lexists(pasta):
+                pasta = os.path.join(DADOS, f"{slug}_{sufixo}")
+                sufixo += 1
+            validar_pasta_para_abrir(pasta)
         cur = con.execute("INSERT INTO perfis (nome, pasta, foto) VALUES (?, ?, ?)",
                           (nome, caminho_salvo(pasta), foto))
         return cur.lastrowid
@@ -1557,8 +1699,11 @@ class App(tk.Tk):
         return [(i, n, caminho_real(p), f) for i, n, p, f in linhas]
 
     def calcular_estado(self):
+        perfis = self.perfis()
+        if not perfis:
+            return {}
         abertos = claudes_abertos()
-        return {p[2]: (esta_logado(p[2]), normalizar(p[2]) in abertos) for p in self.perfis()}
+        return {p[2]: (esta_logado(p[2]), normalizar(p[2]) in abertos) for p in perfis}
 
     def atualizar_estado(self):
         try:
@@ -1567,7 +1712,10 @@ class App(tk.Tk):
             novo = self.calcular_estado()
             if novo != self.estado:
                 self.estado = novo
-                self.recarregar()
+                if self.login_perfil and novo.get(self.login_perfil[2], (False, False))[0]:
+                    self.cancelar_login()
+                else:
+                    self.recarregar()
         except Exception as e:
             log(f"erro ao atualizar estado: {e}")
         self.after(2000, self.atualizar_estado)
@@ -1604,7 +1752,7 @@ class App(tk.Tk):
     def _card(self, p, i, compacto):
         _, nome, pasta, foto = p
         logado, aberto = self.estado.get(pasta, (False, False))
-        esperando = bool(self.login_inicio and self.login_perfil and self.login_perfil[2] == pasta)
+        esperando = bool(self.login_perfil and self.login_perfil[2] == pasta)
 
         c = tk.Frame(self.area, bg=C["CARD"], highlightthickness=1,
                      highlightbackground=C["ACCENT"] if esperando else C["BORDA"])
@@ -1676,7 +1824,12 @@ class App(tk.Tk):
             self.after(1500, self.forcar_estado)
 
     def fechar_perfil(self, p):
-        fechar_claude(p[2])
+        if self.login_perfil and self.login_perfil[0] == p[0]:
+            self.cancelar_login()
+        try:
+            fechar_claude(p[2])
+        except OSError as e:
+            dialogo(self, self.t("erro"), str(e))
         self.forcar_estado()
 
     def forcar_estado(self):
@@ -1690,8 +1843,16 @@ class App(tk.Tk):
     def sair(self, p):
         if not self.confirmar(self.t("sair"), self.t("sair_q", n=p[1])):
             return
-        fechar_claude(p[2])
-        deslogar(p[2])
+        if self.login_perfil and self.login_perfil[0] == p[0]:
+            self.cancelar_login()
+        try:
+            if not eh_perfil_claude(p[2]):
+                raise ValueError(self.t("pasta_invalida"))
+            fechar_claude(p[2])
+            deslogar(p[2])
+        except (OSError, ValueError) as e:
+            dialogo(self, self.t("erro"), str(e))
+            return
         log(f"deslogado: {p[1]}")
         self.forcar_estado()
         self.mostrar_status(self.t("saiu", n=p[1]), False)
@@ -1761,74 +1922,46 @@ class App(tk.Tk):
         if not self.precisa_claude():
             return
         try:
-            cfg_set("login_pasta", p[2])
-            self.parar_vigia()
-            self.vigia = VigiaProcessos(self.fila.put)
             abrir_claude(self.claude, p[2])
-        except Exception as e:
+        except (OSError, ValueError) as e:
             dialogo(self, self.t("erro"), str(e))
             return
-        self.login_inicio = time.time()
+        self.cancelar_login()
         self.login_perfil = p
-        self.ultimo_clip = self.ler_clip()
-        log(f"login iniciado para {p[1]} ({p[2]})")
+        self.login_timer = self.after(LOGIN_TIMEOUT * 1000, lambda: self.cancelar_login(self.t("esgotado")))
         self.mostrar_status(self.t("aguardando", n=p[1]), True)
         self.recarregar()
 
-    def ler_clip(self):
-        try:
-            return self.clipboard_get().strip()
-        except tk.TclError:
-            return ""
-
     def colar_link(self):
-        url = self.ler_clip()
-        if not url.startswith("claude://"):
-            url = (dialogo(self, self.t("colar"), self.t("colar_pergunta"), entrada="",
-                           botoes=[(self.t("ok"), True, "primario"), (self.t("cancelar"), None, "normal")]) or "")
-        if url.startswith("claude://"):
-            self.ultimo_clip = url
-            self.enviar_link(url)
-        elif url:
+        perfil = self.login_perfil
+        tentativa = self.login_timer
+        if perfil is None:
+            return
+        url = dialogo(self, f"{self.t('colar')} · {perfil[1]}", self.t("colar_pergunta"),
+                      entrada="", ocultar=True, botoes=[(self.t("ok"), True, "primario"),
+                                                       (self.t("cancelar"), None, "normal")])
+        if not url or self.login_perfil is not perfil or self.login_timer != tentativa:
+            return
+        rota = r"claude://(?:login/|claude\.ai/(?:magic-link|sso-callback|login)[/?#])([^\s\x00-\x1f]+)"
+        retorno = re.fullmatch(rota, url)
+        if not retorno or not retorno[1].strip("/?#&="):
             dialogo(self, self.t("erro"), self.t("invalido"))
-
-    def enviar_link(self, url):
-        p = self.login_perfil
-        cfg_set("login_pasta", None)
-        self.parar_vigia()
-        abrir_claude(self.claude, p[2], url)
-        log(f"link entregue ao perfil {p[1]}")
-        self.login_inicio = None
-        self.mostrar_status(self.t("enviado", n=p[1]), False)
+            return
+        try:
+            abrir_claude(self.claude, perfil[2], url)
+        except (OSError, ValueError) as e:
+            dialogo(self, self.t("erro"), e.strerror if isinstance(e, OSError) and e.strerror else self.t("pasta_invalida"))
+            return
+        self.cancelar_login()
+        self.mostrar_status(self.t("enviado", n=perfil[1]), False)
         self.after(6000, self.esconder_status)
         self.after(3000, self.forcar_estado)
-        self.recarregar()
-
-    def parar_vigia(self):
-        if self.vigia:
-            self.vigia.parar = True
-            self.vigia = None
-
-    def vigiar_login(self):
-        if self.login_inicio:
-            try:
-                capturado = self.fila.get_nowait()
-            except queue.Empty:
-                capturado = None
-            clip = self.ler_clip()
-            if capturado:
-                self.enviar_link(capturado)
-            elif clip != self.ultimo_clip and clip.startswith("claude://"):
-                self.ultimo_clip = clip
-                self.enviar_link(clip)
-            elif time.time() - self.login_inicio > LOGIN_TIMEOUT:
-                self.cancelar_login(self.t("esgotado"))
-        self.after(300, self.vigiar_login)
 
     def cancelar_login(self, msg=None):
-        self.login_inicio = None
-        cfg_set("login_pasta", None)
-        self.parar_vigia()
+        self.login_perfil = None
+        if self.login_timer is not None:
+            self.after_cancel(self.login_timer)
+            self.login_timer = None
         if msg:
             self.mostrar_status(msg, False)
             self.after(6000, self.esconder_status)
@@ -1844,7 +1977,7 @@ class App(tk.Tk):
         self.status.pack(fill="x", padx=22, pady=(14, 0), before=self.corpo)
 
     def esconder_status(self):
-        if not self.login_inicio:
+        if not self.login_perfil:
             self.status.pack_forget()
 
     # ----- outras ações -----
@@ -1858,6 +1991,9 @@ class App(tk.Tk):
                 novo_id = self._inserir(con, nome)
         except sqlite3.IntegrityError:
             dialogo(self, self.t("erro"), self.t("existe"))
+            return
+        except OSError as e:
+            dialogo(self, self.t("erro"), str(e))
             return
         self.forcar_estado()
         # Logo depois de criar, já pede a foto (galeria ou upload).
@@ -1878,25 +2014,41 @@ class App(tk.Tk):
         self.recarregar()
 
     def pasta(self, p):
-        os.makedirs(p[2], exist_ok=True)
-        os.startfile(p[2])
+        try:
+            validar_pasta_para_abrir(p[2])
+            os.makedirs(p[2], exist_ok=True)
+            os.startfile(p[2])
+        except OSError as e:
+            dialogo(self, self.t("erro"), str(e))
 
     def excluir(self, p):
-        if not self.confirmar(self.t("excluir"), self.t("excluir_q", n=p[1])):
-            return
-        apagar = self.confirmar(self.t("excluir"), self.t("excluir_dados"))
-        fechar_claude(p[2])
-        with db() as con:
-            con.execute("DELETE FROM perfis WHERE id = ?", (p[0],))
-        if apagar:
-            shutil.rmtree(p[2], ignore_errors=True)
+        try:
+            perfis = self.perfis()
+            if p not in perfis:
+                return
+            identidade = identidade_para_apagar(p, perfis)
+            msg = self.t("excluir_q", n=p[1])
+            if identidade is None:
+                msg += "\n\n" + self.t("pastas_preservadas")
+            if not self.confirmar(self.t("excluir"), msg):
+                return
+            apagar = identidade is not None and self.confirmar(self.t("excluir"), self.t("excluir_dados"))
+            if self.login_perfil and self.login_perfil[0] == p[0]:
+                self.cancelar_login()
+            if apagar:
+                apagar_pasta_perfil(p, self.perfis, identidade)
+            with db() as con:
+                atual = con.execute("SELECT pasta FROM perfis WHERE id = ?", (p[0],)).fetchone()
+                if atual and normalizar(caminho_real(atual[0])) == normalizar(p[2]):
+                    con.execute("DELETE FROM perfis WHERE id = ? AND pasta IS ?", (p[0], atual[0]))
+                    con.execute("DELETE FROM config WHERE chave = ?", (f"apagar_perfil_{p[0]}",))
+        except (OSError, sqlite3.Error) as e:
+            dialogo(self, self.t("erro"), str(e))
         self.forcar_estado()
 
     def fechar(self):
-        cfg_set("login_pasta", None)
         if self.state() == "normal":
             cfg_set("geometria", self.geometry())
-        self.parar_vigia()
         self.destroy()
 
 
@@ -1915,10 +2067,9 @@ def reiniciar(app):
 
 def principal():
     global _MUTEX
-    if len(sys.argv) >= 3 and sys.argv[1] in ("--link", "--browser"):
-        # Registro deixado por versão antiga: devolve e repassa o link ao destino normal.
-        devolver_registros()
-        os.startfile(sys.argv[2])
+    if sys.argv[1:2] in (["--link"], ["--browser"]):
+        ctypes.windll.user32.MessageBoxW(None, "In Windows Settings → Apps → Default apps, "
+                                        "select your browser for web links and Claude for claude://.", APP, 0x40)
         return
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("RichardKPL.MultiClaude")
     _k32.CreateMutexW.restype = wt.HANDLE

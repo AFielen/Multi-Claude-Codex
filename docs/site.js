@@ -23,9 +23,11 @@
   }
   function renderRelease() {
     const label = document.getElementById("versao");
-    label.textContent = release
-      ? [release.tag, t("portable"), release.mb ? release.mb + " MB" : ""].filter(Boolean).join(" · ")
-      : t("portable") + " · .exe";
+    const parts = release ? [release.tag] : [];
+    if (!release || release.mb !== null) {
+      parts.push(t("portable"), release?.mb ? release.mb + " MB" : ".exe");
+    }
+    label.textContent = parts.join(" · ");
   }
   function renderDownloads(count) {
     const label = document.getElementById("downloads-count");
@@ -75,20 +77,39 @@
     root.dataset.theme = dark ? "light" : "dark";
     savePreference("tema", root.dataset.theme);
   });
-  fetch("https://api.github.com/repos/RichardKPL/multi-claude/releases?per_page=100")
-    .then(r => r.ok ? r.json() : null)
-    .then(data => {
-      if (!Array.isArray(data) || !data.length) return;
-      const releases = data;
-      const latest = releases[0];
-      const exe = (latest.assets || []).find(a => /\.exe$/i.test(a.name));
-      release = {tag: latest.tag_name, mb: exe ? Math.round(exe.size / 1048576) : null};
-      if (exe) document.getElementById("baixar").href = exe.browser_download_url;
-      renderRelease();
-      downloadCount = releases.reduce((total, item) => total + (item.assets || [])
-        .filter(asset => /\.exe$/i.test(asset.name))
-        .reduce((sum, asset) => sum + (Number(asset.download_count) || 0), 0), 0);
-      renderDownloads(downloadCount);
-    })
-    .catch(() => {});
+  const releasesApi = "https://api.github.com/repos/RichardKPL/multi-claude/releases";
+  async function loadLatestRelease() {
+    const response = await fetch(releasesApi + "/latest");
+    if (!response.ok) return;
+    const latest = await response.json();
+    const exe = latest.assets.find(asset => asset.name === "Multi-Claude-Portable.exe");
+    const url = exe ? exe.browser_download_url : latest.html_url;
+    if (!url || !latest.tag_name) return;
+    release = {tag: latest.tag_name, mb: exe ? Math.round(exe.size / 1048576) : null};
+    document.querySelectorAll("[data-download]").forEach(link => { link.href = url; });
+    renderRelease();
+  }
+  async function loadDownloadCount() {
+    let url = releasesApi + "?per_page=100";
+    let total = 0;
+    while (url) {
+      const response = await fetch(url);
+      if (!response.ok) return;
+      const releases = await response.json();
+      for (const item of releases) {
+        for (const asset of item.assets) {
+          if (!/\.exe$/i.test(asset.name)) continue;
+          if (!Number.isSafeInteger(asset.download_count) || asset.download_count < 0) return;
+          total += asset.download_count;
+        }
+      }
+      const next = /<([^>]+)>;\s*rel="next"/.exec(response.headers.get("Link") || "");
+      url = next && next[1];
+    }
+    downloadCount = total;
+    renderDownloads(total);
+  }
+  // Static download links remain usable when the GitHub API is unavailable.
+  loadLatestRelease().catch(() => {});
+  loadDownloadCount().catch(() => {});
 })();

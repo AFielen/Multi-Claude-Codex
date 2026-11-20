@@ -1,10 +1,13 @@
 # Dados do usuário (nunca vão para o repositório)
 perfis.db
 perfis.db-journal
+perfis.db-wal
+perfis.db-shm
 log.txt
 log.txt.old
 dados/
-profile_pictures/usuario_*
+# The ten bundled pictures are tracked. Other gallery files belong to the user.
+profile_pictures/*
 
 # Build
 build/
@@ -13,3 +16,5 @@ dist/
 *.spec
 __pycache__/
 *.pyc
+.venv/
+recursos/node_modules/
