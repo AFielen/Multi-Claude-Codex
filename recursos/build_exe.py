@@ -23,8 +23,8 @@ MODULOS = ("profile_code.py", "profile_settings.py", "profile_shortcut.py", "pro
            "windows_profiles.py", "workspace_usage.py")
 # Arquivos de distribuição revisados. A galeria também aceita imagens particulares.
 RECURSOS_PADRAO = {
-    "recursos/icone.ico": "0513afe73f9f85561ba1feb49b0b5ebd3250ad0afc26d000d0dcc4fb2d3a0350",
-    "recursos/icone.png": "f98eee0b00b8f523569431d869a607840b17b5dee1bf9c66ca4ef0b4fb1550b7",
+    "recursos/icone.ico": "89353c2486242f0db60b677da61cbd9726b4d3dad7ac84d0b3c412eda6d42552",
+    "recursos/icone.png": "8fe5236a50b47973ec5ab1732bae07839aa7307ea3b7d0b352916235aa606530",
     "profile_pictures/astronaut.png": "820d488d602a186b76df145b352b6f1b311728c304e9acd3172700906f67232f",
     "profile_pictures/carp.png": "5e45fe046249470f5c3481efd075d8d8aa7d668227e3dbcb55f6ac94f19776de",
     "profile_pictures/comet.png": "94443721dda3dd6db7fc595b92ac28b914b38e2892324752fa0363043028f38f",
