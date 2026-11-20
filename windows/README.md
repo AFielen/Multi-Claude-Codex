@@ -14,6 +14,10 @@ Eine eigene Testbasis lässt sich beim Start ausdrücklich angeben. Der folgende
 
 **Übersicht** zeigt den gemeldeten Fünf-Stunden- und Wochenverbrauch mit Rücksetzzeitpunkt. Dazu im isolierten Profil die Limitanzeige einschalten und Claude Code verwenden. Sobald dessen Statuszeile einen Messwert liefert, kann der Manager ihn anzeigen. Der Tab **Claude Code** summiert die in der lokalen Profilhistorie gespeicherten Token. Die Schaltfläche zum Nachladen lässt die aktive Ansicht stehen. Bei gemeinsam genutzter Code-Konfiguration lässt sich Verbrauch keinem einzelnen Profil zuordnen.
 
+**CPU und RAM** werden etwa alle drei Sekunden aktualisiert, solange der Manager geöffnet ist. Die Anzeige umfasst Claude Desktop sowie isolierte Claude-Code-Sitzungen, die diese Manager-Version über die Terminal-Schaltfläche oder den kopierten Profilbefehl gestartet hat. Laufende Unterprozesse wie Test-Worker zählen zum jeweiligen Profil. Unabhängig gestartete Terminals und gemeinsam genutzte Code-Sitzungen lassen sich keinem Profil eindeutig zuordnen.
+
+Der CPU-Wert gibt den Anteil an der verfügbaren CPU-Zeit über alle logischen Prozessoren an. Er erscheint ab der zweiten Messung. RAM zeigt den privaten physischen Arbeitsspeicher in MiB oder GiB. Auf älteren Windows-Versionen verwendet der Manager den gesamten Arbeitssatz der Prozesse, der auch gemeinsam genutzte Speicherseiten enthält. Ein Strich kennzeichnet einen fehlenden Messwert.
+
 ## Entwicklung und Prüfung
 
 Im Repository-Stamm auf Windows x64 mit .NET-10-SDK ausführen. Die Tests benötigen eine interaktive Windows-Sitzung und Python mit Tk für die Referenzdaten. Der Rauchtest kompiliert mit dem Windows-.NET-Framework-Compiler einen fiktiven Desktop-Starter und zeichnet dessen Startparameter in einem temporären Ordner auf. Die C#-Anwendung selbst benötigt kein Python.

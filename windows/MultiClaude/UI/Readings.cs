@@ -14,6 +14,7 @@ public partial class MainWindow
     private bool usageFailed, readingStatus;
     private readonly Dictionary<string, (bool Open, bool Signed)> status = [];
     private readonly Dictionary<string, (LimitWindow? Five, LimitWindow? Week)> limits = [];
+    private Dictionary<string, ResourceReading> resourceReadings = [];
     private event Action? IndicatorsChanged;
 
     private async void RequestUsage(bool force)
@@ -112,16 +113,24 @@ public partial class MainWindow
         var generation = usageGeneration;
         try
         {
-            var updates = await Task.Run(() => batch.Select(p =>
+            var (updates, readings) = await Task.Run(() =>
             {
-                bool open = integration.IsRunning(p);
-                bool signed = integration.IsSignedIn(p);
-                (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Week) saved = default;
-                try { saved = Usage.ReadLimits(p); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException) { }
-                return (p.CodeKey, open, signed, saved);
-            }).ToArray());
+                Dictionary<string, ResourceReading> resources;
+                try { resources = readProcessResources(batch); }
+                catch (Exception) { resources = []; }
+                var rows = batch.Select(p =>
+                {
+                    bool open = integration.IsRunning(p);
+                    bool signed = integration.IsSignedIn(p);
+                    (DateTimeOffset? Observed, LimitWindow? Five, LimitWindow? Week) saved = default;
+                    try { saved = Usage.ReadLimits(p); }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or System.Text.Json.JsonException) { }
+                    return (p.CodeKey, open, signed, saved);
+                }).ToArray();
+                return (rows, resources);
+            });
             if (closed) return;
+            resourceReadings = readings;
             foreach (var row in updates)
             {
                 status[row.CodeKey] = (row.open, row.signed);
@@ -136,7 +145,13 @@ public partial class MainWindow
         }
         catch (Exception)
         {
-            if (!closed && selected?.CodeKey == profile.CodeKey) DesktopStatus.Text = T("unavailable");
+            if (!closed)
+            {
+                resourceReadings.Clear();
+                RenderStatus();
+                UpdateRowIndicators();
+                if (selected?.CodeKey == profile.CodeKey) DesktopStatus.Text = T("unavailable");
+            }
         }
         finally
         {
@@ -157,9 +172,12 @@ public partial class MainWindow
             if (warning.Window != null)
                 return (mark, warning.Window.Percent.ToString("0.##") + " % · " + T(warning.Key), Brushes.DarkOrange);
         }
-        return (mark, p.Shortcut.Length == 0 || bindings?.IsHotkeyRegistered(p.Id) == false ? T(open ? "aberto" : "fechado") : p.Shortcut,
+        return (mark, p.Shortcut.Length == 0 || bindings?.IsHotkeyRegistered(p.Id) == false ? DesktopStateText(p, open) : p.Shortcut,
             open ? Brushes.SeaGreen : (Brush)FindResource("Muted"));
     }
+    private string DesktopStateText(Profile p, bool open) =>
+        !open && resourceReadings.ContainsKey(p.CodeKey) ? "Claude Desktop · " + T("fechado") : T(open ? "aberto" : "fechado");
+
     private void UpdateRowIndicators()
     {
         foreach (var p in profiles)
@@ -170,20 +188,40 @@ public partial class MainWindow
             row.Caption.Foreground = indicator.Ink;
             row.Dot.Text = indicator.Mark;
             row.Dot.Foreground = status.GetValueOrDefault(p.CodeKey).Open ? Brushes.SeaGreen : (Brush)FindResource("Muted");
+            SetResourceText(row.Resources, p);
         }
         IndicatorsChanged?.Invoke();
     }
     private void RenderStatus()
     {
         if (selected is not { } p) return;
+        SetResourceText(ProfileResources, p);
         bool known = status.TryGetValue(p.CodeKey, out var state);
         var waiting = loginProfile?.CodeKey == p.CodeKey;
-        DesktopStatus.Text = known ? T(state.Open ? "aberto" : "fechado") + " · " +
+        DesktopStatus.Text = known ? DesktopStateText(p, state.Open) + " · " +
             T(waiting ? "aguard" : state.Signed ? "conectado" : "desconectado") : "…";
         OpenProfile.Content = T(known && state.Open ? "switch" : "abrir");
         SignIn.Visibility = ShowIf(!state.Signed && !waiting);
         SignOut.Visibility = ShowIf(state.Signed);
         CloseDesktopButton.Visibility = ShowIf(state.Open);
+    }
+    private void SetResourceText(TextBlock label, Profile profile)
+    {
+        if (!resourceReadings.TryGetValue(profile.CodeKey, out var reading))
+        {
+            label.Text = "";
+            label.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var cpu = reading.CpuPercent is double percent ? $"{percent:0.#} %" : "—";
+        var ram = reading.RamBytes switch
+        {
+            null => "—",
+            long bytes when bytes < (1L << 30) => $"{bytes / 1048576d:0} MiB",
+            long bytes => $"{bytes / 1073741824d:0.#} GiB"
+        };
+        label.Text = $"CPU {cpu} · RAM {ram}";
+        label.Visibility = Visibility.Visible;
     }
     private void RefreshClick(object sender, RoutedEventArgs e) => RequestUsage(true);
     private void ToggleCapture(object sender, RoutedEventArgs e) => Safe(() =>

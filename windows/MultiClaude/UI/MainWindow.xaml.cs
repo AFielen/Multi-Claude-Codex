@@ -14,6 +14,7 @@ public partial class MainWindow : Window
 {
     private readonly Catalog catalog;
     private readonly WindowsIntegration integration;
+    private readonly Func<IReadOnlyList<Profile>, Dictionary<string, ResourceReading>> readProcessResources;
     private ProfileBindings? bindings;
     private List<Profile> profiles = [];
     private Profile? selected;
@@ -24,10 +25,13 @@ public partial class MainWindow : Window
     private DateTimeOffset loginDeadline;
     private readonly Queue<string> pendingActivations = new();
 
-    public MainWindow(Catalog catalog)
+    public MainWindow(Catalog catalog) : this(catalog, null) { }
+
+    internal MainWindow(Catalog catalog, Func<IReadOnlyList<Profile>, Dictionary<string, ResourceReading>>? readProcessResources)
     {
         this.catalog = catalog;
         integration = new WindowsIntegration(catalog.Home);
+        this.readProcessResources = readProcessResources ?? integration.ReadProcessResources;
         language = catalog.Get("idioma") ?? CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
         Theme.Apply(catalog.Get("tema") ?? "sistema");
         InitializeComponent();

@@ -8,13 +8,16 @@ internal sealed class DesktopWindows
     private readonly object gate = new();
     private Dictionary<string, List<int>> snapshot = new(StringComparer.OrdinalIgnoreCase);
     private long readAt = -10_000;
+    private long observedByUtcTicks;
 
-    internal IReadOnlySet<string> Folders()
+    internal IReadOnlySet<string> Folders() => Roots().ByFolder.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    internal (IReadOnlyDictionary<string, List<int>> ByFolder, long ObservedByUtcTicks) Roots()
     {
         lock (gate)
         {
             Refresh(false, false);
-            return snapshot.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return (snapshot, observedByUtcTicks);
         }
     }
 
@@ -34,6 +37,8 @@ internal sealed class DesktopWindows
         // WMI supplies command lines through its supported process provider. No debugging or process-memory access.
         using var current = Process.GetCurrentProcess();
         string query = $"SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name='claude.exe' AND SessionId={current.SessionId} AND (CommandLine LIKE '%--user-data-dir=%' OR CommandLine IS NULL)";
+        // A process born after this boundary cannot safely inherit a cached profile-to-PID association.
+        long beforeQuery = DateTime.UtcNow.Ticks;
         dynamic? locator = null, service = null, records = null;
         try
         {
@@ -65,6 +70,7 @@ internal sealed class DesktopWindows
             if (locator != null) Marshal.FinalReleaseComObject(locator);
         }
         snapshot = byFolder;
+        observedByUtcTicks = beforeQuery;
         readAt = Environment.TickCount64;
     }
 

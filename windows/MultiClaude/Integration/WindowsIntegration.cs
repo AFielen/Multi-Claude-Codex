@@ -11,6 +11,7 @@ public sealed class WindowsIntegration
     private readonly string home;
     private readonly Dictionary<string, long> pending = new(StringComparer.OrdinalIgnoreCase);
     private readonly DesktopWindows windows = new();
+    private readonly ProcessResources resources = new();
     private (string Key, string Folder, long Expires)? login;
     private readonly HashSet<int> colored = [];
 
@@ -54,6 +55,19 @@ public sealed class WindowsIntegration
     public void CancelLogin() => login = null;
 
     public IReadOnlySet<string> RunningFolders() => windows.Folders();
+
+    internal Dictionary<string, ResourceReading> ReadProcessResources(IReadOnlyList<Profile> profiles)
+    {
+        var roots = CodeProcessRegistry.Active(home, profiles);
+        var (desktops, observedBy) = windows.Roots();
+        foreach (var p in profiles)
+        {
+            if (!desktops.TryGetValue(p.DesktopPath, out var pids)) continue;
+            if (!roots.TryGetValue(p.CodeKey, out var list)) roots[p.CodeKey] = list = [];
+            foreach (int pid in pids) list.Add(new ProcessRoot(pid, 0, observedBy));
+        }
+        return resources.Sample(roots);
+    }
 
     public bool DesktopAvailable()
     {
@@ -199,18 +213,25 @@ public sealed class WindowsIntegration
         return start;
     }
 
-    public void OpenCode(Profile p, bool login = false)
+    public void OpenCode(Profile p, bool login = false) => OpenCode(p, CodeStart(p, login));
+
+    internal void OpenCode(Profile p, ProcessStartInfo start)
     {
-        var start = CodeStart(p, login);
         start.WorkingDirectory = CodeLauncher.UserFolder;
-        CodeLauncher.NewConsole(start);
+        CodeProcessRegistry.Record(home, p, CodeLauncher.NewConsole(start));
     }
 
     public int RunTerminal(Profile? p, bool login, uint? consolePid)
     {
         var start = CodeStart(p, login);
         CodeLauncher.Attach(consolePid);
+        return RunTerminal(p, start);
+    }
+
+    internal int RunTerminal(Profile? p, ProcessStartInfo start)
+    {
         using var cli = Process.Start(start) ?? throw new IOException("Claude Code konnte nicht gestartet werden.");
+        CodeProcessRegistry.Record(home, p, CodeProcessRegistry.Identity(cli.Id, cli.SafeHandle));
         cli.WaitForExit();
         return cli.ExitCode;
     }

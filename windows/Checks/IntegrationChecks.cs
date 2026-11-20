@@ -158,8 +158,18 @@ internal static class IntegrationChecks
             var pidA = processes.Matching(first, fresh: true);
             var pidB = processes.Matching(second);
             Check(pidA.SequenceEqual([a.Id]) && pidB.SequenceEqual([b.Id]), "WMI must match each Windows process to its exact profile");
+            var catalog = new Catalog(Path.Combine(root, "resource catalog"));
+            var profiles = new[] { catalog.Draft() with { DesktopPath = first, CodeKey = new string('a', 32) },
+                catalog.Draft() with { DesktopPath = second, CodeKey = new string('b', 32) } };
+            var monitor = new WindowsIntegration(catalog.Home);
+            var initial = monitor.ReadProcessResources(profiles);
+            Check(initial.Count == 2 && profiles.All(p => initial[p.CodeKey] is { CpuPercent: null, RamBytes: > 0 }),
+                "Both live Desktop profiles should report their own RAM before a CPU interval is available");
             DesktopWindows.Close(pidA);
             Check(a.WaitForExit(5000) && !b.HasExited, "Graceful close affected only the selected Desktop");
+            var remaining = monitor.ReadProcessResources(profiles);
+            Check(remaining.Count == 1 && remaining.TryGetValue(profiles[1].CodeKey, out var stillOpen)
+                && stillOpen is { CpuPercent: >= 0 and <= 100, RamBytes: > 0 }, "A closed profile cannot retain a reading");
             DesktopWindows.Close(pidB);
             Check(b.WaitForExit(5000), "Second Desktop closed gracefully");
         }

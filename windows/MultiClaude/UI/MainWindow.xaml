@@ -99,6 +99,7 @@
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock x:Name="SelectedName" FontWeight="SemiBold" FontSize="16" TextTrimming="CharacterEllipsis"/>
                                 <TextBlock x:Name="DesktopStatus" Style="{StaticResource Caption}"/>
+                                <TextBlock x:Name="ProfileResources" Style="{StaticResource Caption}" Visibility="Collapsed"/>
                             </StackPanel>
                         </DockPanel>
                     </Border>

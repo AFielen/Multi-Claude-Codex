@@ -103,7 +103,7 @@ internal static class DialogChecks
         => VisualChildren(root).OfType<T>().FirstOrDefault(item => AutomationProperties.GetAutomationId(item) == id)
             ?? throw new Exception("Missing dialog control " + id);
 
-    private static IEnumerable<DependencyObject> VisualChildren(DependencyObject root)
+    internal static IEnumerable<DependencyObject> VisualChildren(DependencyObject root)
     {
         var stack = new Stack<DependencyObject>();
         stack.Push(root);

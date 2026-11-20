@@ -12,7 +12,7 @@ public partial class MainWindow
     private Point dragStart;
     private Profile? dragProfile;
     private List<Profile>? renderedSidebar;
-    private readonly Dictionary<string, (TextBlock Dot, TextBlock Caption)> rowIndicators = [];
+    private readonly Dictionary<string, (TextBlock Dot, TextBlock Caption, TextBlock Resources)> rowIndicators = [];
     private void OnResize(object sender, SizeChangedEventArgs e)
     {
         var newWide = ActualWidth >= 720;
@@ -61,8 +61,12 @@ public partial class MainWindow
                         top.Children.Add(new TextBlock { Text = profile.Name, TextTrimming = TextTrimming.CharacterEllipsis, FontWeight = FontWeights.SemiBold });
                         var caption = new TextBlock { FontSize = 11, Margin = new Thickness(0, 1, 0, 0) };
                         row.Children.Add(top); row.Children.Add(caption);
-                        rowIndicators.Add(profile.CodeKey, (dot, caption));
-                        var item = new ListBoxItem { Tag = profile, Content = layout, Padding = new Thickness(4), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+                        var resources = new TextBlock { Style = (Style)FindResource("Caption"), Visibility = Visibility.Collapsed };
+                        var card = new StackPanel();
+                        card.Children.Add(layout);
+                        card.Children.Add(resources);
+                        rowIndicators.Add(profile.CodeKey, (dot, caption, resources));
+                        var item = new ListBoxItem { Tag = profile, Content = card, Padding = new Thickness(4), HorizontalContentAlignment = HorizontalAlignment.Stretch };
                         AutomationProperties.SetName(item, profile.Name);
                         ProfileList.Items.Add(item);
                     }

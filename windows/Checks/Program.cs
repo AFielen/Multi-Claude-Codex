@@ -21,6 +21,10 @@ internal static class CheckRunner
             Console.WriteLine("PASS SQLite import, identities, path and deletion rules");
             IntegrationChecks.Run(Path.Combine(temp.FullName, "integration"));
             Console.WriteLine("PASS Windows integration, isolated launch settings, shortcuts, sharing");
+            CodeProcessRegistryChecks.Run(temp.FullName);
+            Console.WriteLine("PASS managed Claude Code process registrations");
+            ResourceChecks.Run();
+            Console.WriteLine("PASS process tree attribution, Windows CPU and working set sampling");
             UsageChecks.Run(Path.Combine(temp.FullName, "usage"));
             Console.WriteLine("PASS transcript aggregation, current limits and custom status line preservation");
             UiTest(Path.Combine(temp.FullName, "window"));
@@ -61,7 +65,20 @@ internal static class CheckRunner
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         Theme.Apply("claro");
-        var window = new MainWindow(catalog);
+        int samplePhase = 0;
+        Dictionary<string, ResourceReading> ReadSamples(IReadOnlyList<Profile> profiles)
+        {
+            if (app.Dispatcher.CheckAccess() || profiles.Count != 2)
+                throw new InvalidOperationException("Process counters must be read in a background batch.");
+            return Volatile.Read(ref samplePhase) switch
+            {
+                0 => [],
+                1 => new() { [first.CodeKey] = new(0, 512L << 20), [second.CodeKey] = new(null, 1536L << 20) },
+                2 => throw new IOException("Simulated sampling failure"),
+                _ => new() { [second.CodeKey] = new(12.5, null) }
+            };
+        }
+        var window = new MainWindow(catalog, ReadSamples);
         try
         {
             void Record(int percent) => File.WriteAllText(Path.Combine(code, "multiclaude-limits.json"), JsonSerializer.Serialize(new
@@ -75,8 +92,19 @@ internal static class CheckRunner
             window.Activate();
             T Node<T>(string id) => (T)window.FindName(id);
             PumpUntil(() => Node<TextBlock>("FivePercent").Text.Contains("62"));
+            if (Node<TextBlock>("ProfileResources") is not { Visibility: Visibility.Collapsed })
+                throw new Exception("A compact profile needs a resource readout that hides when no instance is running.");
             if (window.Width != 480 || window.Height != 360 || Node<TextBlock>("SelectedName").Text != second.Name)
                 throw new Exception("Default dimensions or selected profile changed.");
+            var resourceText = Node<TextBlock>("ProfileResources");
+            Volatile.Write(ref samplePhase, 1);
+            string secondUsage = $"CPU — · RAM {1.5} GiB";
+            PumpUntil(() => resourceText.IsVisible && resourceText.Text == secondUsage);
+            if (!Node<TextBlock>("DesktopStatus").Text.Contains("Claude Desktop"))
+                throw new Exception("A running Code session must distinguish a closed Desktop from the profile's local activity.");
+            window.UpdateLayout();
+            if (resourceText.ActualHeight <= 0 || resourceText.ActualWidth < resourceText.DesiredSize.Width)
+                throw new Exception("Compact profile clipped the resource reading.");
             if (Environment.GetEnvironmentVariable("MULTI_CLAUDE_TEST_SCREENSHOT") is string screenshot)
             {
                 var capture = new System.Windows.Media.Imaging.RenderTargetBitmap((int)window.ActualWidth, (int)window.ActualHeight, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
@@ -110,8 +138,25 @@ internal static class CheckRunner
             window.UpdateLayout();
             PumpUntil(() => Node<ListBox>("ProfileList").IsVisible);
             var list = Node<ListBox>("ProfileList");
+            IEnumerable<TextBlock> RowTexts(int index) =>
+                DialogChecks.VisualChildren((ListBoxItem)list.Items[index]).OfType<TextBlock>();
+            const string firstUsage = "CPU 0 % · RAM 512 MiB";
+            var firstReading = RowTexts(0).Single(t => t.IsVisible && t.Text == firstUsage);
+            var secondReading = RowTexts(1).Single(t => t.IsVisible && t.Text == secondUsage);
+            if (!RowTexts(1).Any(t => t.Text.Contains("89 %")))
+                throw new Exception("Resource reading displaced the quota warning in the sidebar.");
             list.SelectedIndex = 0;
             PumpUntil(() => Node<TextBlock>("SelectedName").Text == first.Name);
+            if (resourceText.Text != firstUsage) throw new Exception("Selection retained the previous profile's counters.");
+            Volatile.Write(ref samplePhase, 2);
+            PumpUntil(() => !resourceText.IsVisible && !firstReading.IsVisible && !secondReading.IsVisible);
+            if (!Node<TextBlock>("DesktopStatus").Text.Contains(Texts.Get("de", "fechado")) ||
+                !RowTexts(1).Any(t => t.Text.Contains("89 %")))
+                throw new Exception("Failed resource sample displaced desktop or quota status.");
+            Volatile.Write(ref samplePhase, 3);
+            PumpUntil(() => secondReading.IsVisible && secondReading.Text == $"CPU {12.5} % · RAM —");
+            if (firstReading.IsVisible || resourceText.IsVisible || list.SelectedIndex != 0)
+                throw new Exception("New resource sample changed selection or left stale counters for a closed profile.");
             if (catalog.Get("selected_code_key") != first.CodeKey) throw new Exception("Selection not persisted.");
             DialogChecks.Run(window);
         }

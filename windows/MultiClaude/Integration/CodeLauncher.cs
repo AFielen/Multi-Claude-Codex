@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Win32.SafeHandles;
 
 namespace MultiClaude;
 
@@ -187,7 +188,7 @@ internal static class CodeLauncher
             throw new IOException("Diesen Befehl in einer PowerShell-Konsole ausführen.");
     }
 
-    internal static void NewConsole(ProcessStartInfo start)
+    internal static ProcessRoot? NewConsole(ProcessStartInfo start)
     {
         var args = new StringBuilder(string.Join(" ", start.ArgumentList.Prepend(start.FileName).Select(QuoteArg)));
         string environment = string.Concat(start.Environment.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
@@ -199,7 +200,8 @@ internal static class CodeLauncher
             if (!CreateProcessW(start.FileName, args, 0, 0, false, 0x410, data, start.WorkingDirectory, ref si, out var process))
                 throw new Win32Exception(Marshal.GetLastWin32Error());
             CloseHandle(process.Thread);
-            CloseHandle(process.Process);
+            using var handle = new SafeProcessHandle(process.Process, ownsHandle: true);
+            return CodeProcessRegistry.Identity((int)process.Pid, handle);
         }
         finally { Marshal.FreeHGlobal(data); }
     }
