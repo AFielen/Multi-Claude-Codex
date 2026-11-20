@@ -12,6 +12,6 @@
     <InternalsVisibleTo Include="Checks" />
     <EmbeddedResource Include="Resources/*.json;Resources/*.ps1" />
     <Content Include="../../profile_pictures/*.png" Link="gallery/%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../LICENSE;../../NOTICE" Link="%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../LICENSE;../../NOTICE;../../AUTHORS" Link="%(Filename)%(Extension)" ExcludeFromSingleFile="true" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
