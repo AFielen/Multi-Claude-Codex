@@ -107,14 +107,21 @@ public partial class MainWindow
 
     private async void StartStatusRead()
     {
-        if (selected is not { } profile || closed || readingStatus) return;
+        if (closed || readingStatus) return;
+        var profile = selected;
         readingStatus = true;
         var batch = profiles.ToArray();
         var generation = usageGeneration;
         try
         {
+            if (profile == null)
+            {
+                await Task.Run(integration.PruneWindowIcons);
+                return;
+            }
             var (updates, readings) = await Task.Run(() =>
             {
+                integration.PruneWindowIcons();
                 Dictionary<string, ResourceReading> resources;
                 try { resources = readProcessResources(batch); }
                 catch (Exception) { resources = []; }
@@ -150,13 +157,13 @@ public partial class MainWindow
                 resourceReadings.Clear();
                 RenderStatus();
                 UpdateRowIndicators();
-                if (selected?.CodeKey == profile.CodeKey) DesktopStatus.Text = T("unavailable");
+                if (profile != null && selected?.CodeKey == profile.CodeKey) DesktopStatus.Text = T("unavailable");
             }
         }
         finally
         {
             readingStatus = false;
-            if (!closed && selected != null && selected.CodeKey != profile.CodeKey) StartStatusRead();
+            if (!closed && selected != null && selected.CodeKey != profile?.CodeKey) StartStatusRead();
         }
     }
     private (string Mark, string Caption, Brush Ink) Indicator(Profile p)

@@ -127,14 +127,17 @@ internal static class IntegrationChecks
                     window.Opacity = 0;
                     window.StartPosition = FormStartPosition.Manual;
                     window.Location = new Point(-30000, -30000);
-                    window.ShowInTaskbar = false;
+                    window.ShowInTaskbar = true;
+                    window.Text = "Multi Claude test · " + System.IO.Path.GetFileName(args[1]);
                     window.Shown += delegate { System.IO.File.WriteAllText(args[1], "ready"); };
                     Application.Run(window);
                 }
             }
             """);
         var build = new ProcessStartInfo(compiler) { UseShellExecute = false, CreateNoWindow = true };
-        foreach (var argument in new[] { "/nologo", "/target:winexe", "/out:" + program, "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll", source })
+        string fixtureIcon = Path.Combine(root, "fixture.ico");
+        using (var file = File.Create(fixtureIcon)) System.Drawing.SystemIcons.Information.Save(file);
+        foreach (var argument in new[] { "/nologo", "/target:winexe", "/out:" + program, "/win32icon:" + fixtureIcon, "/r:System.Drawing.dll", "/r:System.Windows.Forms.dll", source })
             build.ArgumentList.Add(argument);
         using (var compile = Process.Start(build)!)
         {
@@ -159,9 +162,34 @@ internal static class IntegrationChecks
             var pidB = processes.Matching(second);
             Check(pidA.SequenceEqual([a.Id]) && pidB.SequenceEqual([b.Id]), "WMI must match each Windows process to its exact profile");
             var catalog = new Catalog(Path.Combine(root, "resource catalog"));
-            var profiles = new[] { catalog.Draft() with { DesktopPath = first, CodeKey = new string('a', 32) },
-                catalog.Draft() with { DesktopPath = second, CodeKey = new string('b', 32) } };
-            var monitor = new WindowsIntegration(catalog.Home);
+            var profiles = new[] { catalog.Draft() with { Name = "Test Amber", DesktopPath = first, CodeKey = new string('a', 32), Color = "#ddaa11", Border = false },
+                catalog.Draft() with { Name = "Test Blue", DesktopPath = second, CodeKey = new string('b', 32), Color = "#3366bb" } };
+            using var monitor = new WindowsIntegration(catalog.Home);
+            monitor.SyncProfiles(profiles);
+            Check(profiles.All(p => monitor.IsRunning(p with { LastOpen = "123" })), "Both newly opened profiles should be running");
+            var hwndA = a.MainWindowHandle;
+            var hwndB = b.MainWindowHandle;
+            Check(WindowDot(hwndA, 1) == "#ddaa11" && WindowDot(hwndB, 0) == "#3366bb",
+                "Uncombined taskbar buttons should display the profile dot on the live large and small window icons");
+            var groupA = TaskbarGroup.Read(hwndA, TaskbarGroup.AppId);
+            var groupB = TaskbarGroup.Read(hwndB, TaskbarGroup.AppId);
+            Check(!string.IsNullOrEmpty(groupA) && !string.IsNullOrEmpty(groupB) && groupA != groupB,
+                "Windows must give the two running profiles separate taskbar buttons");
+            string? IconFile(nint hwnd) => TaskbarGroup.Read(hwnd, TaskbarGroup.RelaunchIcon) is { } resource && resource.EndsWith(",0")
+                ? resource[..^2] : null;
+            string? amber = IconFile(hwndA), blue = IconFile(hwndB);
+            Check(File.Exists(amber) && File.Exists(blue) && amber != blue,
+                "Each taskbar button should use its profile icon, including with the window border disabled");
+            var edited = profiles[0] with { Color = "#50bb77" };
+            monitor.SyncProfiles([edited, profiles[1]]);
+            Check(monitor.IsRunning(edited) && IconFile(hwndA) is string green
+                && File.Exists(green) && green != amber && IconFile(hwndB) == blue && TaskbarGroup.Read(hwndA, TaskbarGroup.AppId) == groupA
+                && WindowDot(hwndA, 0) == "#50bb77" && WindowDot(hwndB, 1) == "#3366bb",
+                "Editing an open profile should update just its taskbar color and retain its group");
+            monitor.SyncProfiles([profiles[1]]);
+            Check(monitor.IsRunning(edited) && TaskbarGroup.Read(hwndA, TaskbarGroup.AppId) != groupA
+                && WindowDot(hwndA, 0) != "#50bb77" && WindowDot(hwndB, 1) == "#3366bb",
+                "Removing a running profile should restore its window and ignore a stale poll");
             var initial = monitor.ReadProcessResources(profiles);
             Check(initial.Count == 2 && profiles.All(p => initial[p.CodeKey] is { CpuPercent: null, RamBytes: > 0 }),
                 "Both live Desktop profiles should report their own RAM before a CPU interval is available");
@@ -186,6 +214,16 @@ internal static class IntegrationChecks
             CheckExplicitLogin(Path.Combine(root, "manual login"));
         }
         finally { Environment.SetEnvironmentVariable("LOCALAPPDATA", previousLocal); }
+    }
+
+    private static string? WindowDot(nint hwnd, int kind)
+    {
+        nint handle = SendMessageW(hwnd, 0x7f /* WM_GETICON */, kind, 0);
+        if (handle == 0) return null;
+        using var icon = System.Drawing.Icon.FromHandle(handle);
+        using var bitmap = icon.ToBitmap();
+        var pixel = bitmap.GetPixel(bitmap.Width * 4 / 5, bitmap.Height * 4 / 5);
+        return $"#{pixel.R:x2}{pixel.G:x2}{pixel.B:x2}";
     }
 
     private static void CheckExplicitLogin(string home)
@@ -226,6 +264,7 @@ internal static class IntegrationChecks
     }
 
     [DllImport("user32.dll")] private static extern bool PostMessageW(nint hwnd, uint message, nint wparam, nint lparam);
+    [DllImport("user32.dll")] private static extern nint SendMessageW(nint hwnd, uint message, nint wparam, nint lparam);
     [DllImport("user32.dll")] private static extern bool RegisterHotKey(nint hwnd, int token, uint mods, uint key);
     [DllImport("user32.dll")] private static extern bool UnregisterHotKey(nint hwnd, int token);
 

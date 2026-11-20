@@ -53,13 +53,13 @@ internal static class ProfileIcons
         return bitmap;
     }
 
-    private static byte[] IconData(Profile p, Image? photo)
+    private static byte[] IconData(Func<int, Bitmap> render)
     {
         int[] sizes = [16, 24, 32, 48, 64, 128, 256];
         var frames = new List<byte[]>();
         foreach (int size in sizes)
         {
-            using var bitmap = Render(p, size, photo);
+            using var bitmap = render(size);
             using var data = new MemoryStream();
             bitmap.Save(data, ImageFormat.Png);
             frames.Add(data.ToArray());
@@ -83,6 +83,51 @@ internal static class ProfileIcons
         }
         foreach (var frame in frames) writer.Write(frame);
         return output.ToArray();
+    }
+
+    internal static string TaskbarIcon(string home, string executablePath, string color)
+    {
+        var source = new FileInfo(executablePath);
+        Color dot = ColorTranslator.FromHtml(color);
+        string key = FormattableString.Invariant($"v1|{source.FullName.ToUpperInvariant()}|{source.Length}|{source.LastWriteTimeUtc.Ticks}|{dot.ToArgb()}");
+        string hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(key)))[..20];
+        string folder = Path.Combine(home, "profile_shortcuts", "taskbar");
+        string path = Path.Combine(folder, hash + ".ico");
+        if (StoragePaths.RequireUnsharedFile(path)) return path;
+        Directory.CreateDirectory(folder);
+        WriteIconOnce(path, IconData(size => TaskbarFrame(source.FullName, dot, size)));
+        return path;
+    }
+
+    private static Bitmap TaskbarFrame(string executable, Color dot, int size)
+    {
+        using var icon = Icon.ExtractIcon(executable, 0, size)
+            ?? throw new IOException("Das Programmsymbol von Claude Desktop konnte nicht geladen werden.");
+        var bitmap = icon.ToBitmap();
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        float diameter = Math.Max(6, size * .36f);
+        float corner = size - diameter - Math.Max(.5f, size * .025f);
+        var bounds = new RectangleF(corner, corner, diameter, diameter);
+        var rim = .2126 * dot.R + .7152 * dot.G + .0722 * dot.B > 145 ? Brushes.Black : Brushes.White;
+        graphics.FillEllipse(rim, bounds);
+        float edge = Math.Max(1f, size * .028f);
+        bounds.Inflate(-edge, -edge);
+        using var fill = new SolidBrush(dot);
+        graphics.FillEllipse(fill, bounds);
+        return bitmap;
+    }
+
+    private static void WriteIconOnce(string path, byte[] data)
+    {
+        string tmp = Path.Combine(Path.GetDirectoryName(path)!, Guid.NewGuid().ToString("N") + ".tmp");
+        try
+        {
+            using (var writer = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) writer.Write(data);
+            try { File.Move(tmp, path); }
+            catch (IOException) when (StoragePaths.RequireUnsharedFile(path)) { } // A concurrent writer finished first.
+        }
+        finally { File.Delete(tmp); }
     }
 
     private static Bitmap? Photo(string? file)
@@ -110,19 +155,14 @@ internal static class ProfileIcons
         Directory.CreateDirectory(folder);
         string? photo = p.Photo == null ? null : new Catalog(home).PhotoFile(p.Photo);
         using var portrait = Photo(photo);
-        byte[] data = IconData(p, portrait);
+        byte[] data = IconData(size => Render(p, size, portrait));
         string hash = Convert.ToHexStringLower(SHA256.HashData(data))[..20];
         string icon = Path.Combine(folder, $"{p.CodeKey}-{hash}.ico");
-        string tmpIcon = Path.Combine(folder, Guid.NewGuid().ToString("N") + ".tmp");
         string tmpLink = Path.Combine(parent!, Guid.NewGuid().ToString("N") + ".lnk");
         dynamic? shell = null, link = null;
         try
         {
-            if (!StoragePaths.RequireUnsharedFile(icon))
-            {
-                using (var writer = new FileStream(tmpIcon, FileMode.CreateNew, FileAccess.Write, FileShare.None)) writer.Write(data);
-                File.Move(tmpIcon, icon, true);
-            }
+            if (!StoragePaths.RequireUnsharedFile(icon)) WriteIconOnce(icon, data);
             var type = Type.GetTypeFromProgID("WScript.Shell", true)!;
             shell = Activator.CreateInstance(type)!;
             link = shell.CreateShortcut(tmpLink);
@@ -140,7 +180,6 @@ internal static class ProfileIcons
             if (link != null) Marshal.FinalReleaseComObject(link);
             if (shell != null) Marshal.FinalReleaseComObject(shell);
             File.Delete(tmpLink);
-            File.Delete(tmpIcon);
         }
     }
 }
