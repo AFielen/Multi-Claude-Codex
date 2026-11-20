@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace MultiClaude;
@@ -10,9 +11,8 @@ namespace MultiClaude;
 internal static class Program
 {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
-    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
-    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
-    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint RegisterWindowMessage(string name);
+    [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool AllowSetForegroundWindow(int processId);
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowProc callback, IntPtr data);
     private delegate bool EnumWindowProc(IntPtr hwnd, IntPtr data);
@@ -62,6 +62,8 @@ internal static class Program
             ? expanded.ToString() : command.Home;
         var name = Encoding.UTF8.GetBytes(Path.TrimEndingDirectorySeparator(identity).ToLowerInvariant());
         string tag = "MultiClaude.Manager." + Convert.ToHexStringLower(SHA256.HashData(name));
+        uint showManager = RegisterWindowMessage("MultiClaude.ShowManager");
+        if (showManager == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         using var mutex = new Mutex(false, "MultiClaude_" + Convert.ToHexStringLower(MD5.HashData(name))[..16], out bool first);
 
         if (!first)
@@ -71,11 +73,7 @@ internal static class Program
                 GetWindowThreadProcessId(window, out var pid);
                 if ((long)GetProp(window, tag) != pid || pid == 0) return true;
                 AllowSetForegroundWindow((int)pid);
-                if (command.Key == null)
-                {
-                    if (IsIconic(window)) ShowWindowAsync(window, 9);
-                    SetForegroundWindow(window);
-                }
+                if (command.Key == null) PostMessageW(window, showManager, 0, 0);
                 return false;
             }, IntPtr.Zero);
             if (command.Key != null) new Catalog(command.Home).Enqueue(command.Key);
@@ -96,21 +94,30 @@ internal static class Program
         };
         Theme.Apply(catalog.Get("tema") ?? "sistema");
         var main = new MainWindow(catalog);
-        IntPtr hwnd = IntPtr.Zero;
         main.SourceInitialized += (_, _) =>
         {
-            hwnd = new System.Windows.Interop.WindowInteropHelper(main).Handle;
+            var hwnd = new WindowInteropHelper(main).Handle;
+            HwndSource.FromHwnd(hwnd)!.AddHook((nint window, int message, nint wParam, nint lParam, ref bool handled) =>
+            {
+                if (message == showManager)
+                {
+                    handled = true;
+                    main.Dispatcher.InvokeAsync(main.ShowManager);
+                }
+                return 0;
+            });
             SetProp(hwnd, tag, Environment.ProcessId);
+            main.Closed += (_, _) => RemoveProp(hwnd, tag);
         };
         if (command.Key != null) catalog.Enqueue(command.Key);
         var poll = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         poll.Tick += (_, _) =>
         {
-            try { if (main.IsEnabled && main.OwnedWindows.Cast<Window>().All(w => !w.IsVisible) && catalog.Dequeue() is string key) main.ActivateProfile(key); }
+            try { if (!main.ModalOpen && catalog.Dequeue() is string key) main.ActivateProfile(key); }
             catch (Exception error) { poll.Stop(); MessageBox.Show(main, error.Message, main.Title); poll.Start(); }
         };
         main.Loaded += (_, _) => poll.Start();
-        main.Closing += (_, _) => { poll.Stop(); if (hwnd != IntPtr.Zero) RemoveProp(hwnd, tag); };
+        main.Closed += (_, _) => poll.Stop();
         return app.Run(main);
     }
 

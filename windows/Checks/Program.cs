@@ -19,7 +19,7 @@ internal static class CheckRunner
             CheckArguments(temp.FullName);
             StorageChecks.Run(temp.FullName);
             Console.WriteLine("PASS SQLite import, identities, path and deletion rules");
-            IntegrationChecks.Run(Path.Combine(temp.FullName, "integration"));
+            string desktopFixture = IntegrationChecks.Run(Path.Combine(temp.FullName, "integration"));
             Console.WriteLine("PASS Windows integration, isolated launch settings, shortcuts, sharing");
             CodexLauncherChecks.Run(Path.Combine(temp.FullName, "codex package"));
             CodexProfileChecks.Run(Path.Combine(temp.FullName, "codex"));
@@ -32,7 +32,7 @@ internal static class CheckRunner
             Console.WriteLine("PASS process tree attribution, Windows CPU and working set sampling");
             UsageChecks.Run(Path.Combine(temp.FullName, "usage"));
             Console.WriteLine("PASS transcript aggregation, current limits and custom status line preservation");
-            UiTest(Path.Combine(temp.FullName, "window"));
+            UiTest(Path.Combine(temp.FullName, "window"), desktopFixture);
             Console.WriteLine("PASS compact WPF, current readings, selection, focused control and scroll offset");
             return 0;
         }
@@ -57,7 +57,7 @@ internal static class CheckRunner
         }
     }
 
-    private static void UiTest(string home)
+    private static void UiTest(string home, string desktopFixture)
     {
         var catalog = new Catalog(home);
         catalog.Set("idioma", "de");
@@ -70,9 +70,10 @@ internal static class CheckRunner
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(app.Dispatcher));
         Theme.Apply("claro");
-        int samplePhase = 0;
+        int samplePhase = 0, resourceSamples = 0;
         Dictionary<string, ResourceReading> ReadSamples(IReadOnlyList<Profile> profiles)
         {
+            Interlocked.Increment(ref resourceSamples);
             if (app.Dispatcher.CheckAccess() || profiles.Count != 2)
                 throw new InvalidOperationException("Process counters must be read in a background batch.");
             return Volatile.Read(ref samplePhase) switch
@@ -164,10 +165,42 @@ internal static class CheckRunner
                 throw new Exception("New resource sample changed selection or left stale counters for a closed profile.");
             if (catalog.Get("selected_code_key") != first.CodeKey) throw new Exception("Selection not persisted.");
             DialogChecks.Run(window);
+            ManagerMenuChecks.Run(window, catalog, desktopFixture, () => Volatile.Read(ref resourceSamples));
+            CheckTrayLifecycle(window);
         }
-        finally { window.Close(); app.Shutdown(); }
+        finally { app.Shutdown(); }
     }
-    private static void PumpUntil(Func<bool> ready)
+
+    private static void CheckTrayLifecycle(MainWindow window)
+    {
+        var selectedName = (TextBlock)window.FindName("SelectedName");
+        string beforeHide = selectedName.Text;
+        bool closed = false;
+        window.Closed += (_, _) => closed = true;
+        foreach (var state in new[] { WindowState.Normal, WindowState.Maximized })
+        {
+            window.WindowState = state;
+            SystemCommands.MinimizeWindow(window);
+            PumpUntil(() => !window.IsVisible, $"minimize from {state} to the notification area");
+            window.ShowManager();
+            PumpUntil(() => window.IsVisible && window.WindowState == state, $"restore the {state} manager");
+            if (closed || selectedName.Text != beforeHide)
+                throw new Exception("Minimize and restore must preserve the active manager and profile.");
+        }
+        SystemCommands.CloseWindow(window);
+        PumpUntil(() => !window.IsVisible, "hide the manager after Close");
+        if (closed) throw new Exception("Closing the title bar must keep the manager alive.");
+        window.ShowManager();
+        PumpUntil(() => window.IsVisible && window.WindowState == WindowState.Maximized, "restore after Close");
+        if (selectedName.Text != beforeHide) throw new Exception("Restoring after Close changed the selected profile.");
+
+        SystemCommands.CloseWindow(window);
+        PumpUntil(() => !window.IsVisible, "hide before tray exit");
+        ManagerMenuChecks.ClickExit(window);
+        PumpUntil(() => closed, "exit the hidden manager from its tray menu");
+        Console.WriteLine("PASS manager minimize, close to tray, normal/maximized restore and explicit exit");
+    }
+    internal static void PumpUntil(Func<bool> ready, string description = "the expected WPF state")
     {
         var deadline = DateTime.UtcNow.AddSeconds(20);
         do
@@ -178,6 +211,6 @@ internal static class CheckRunner
             if (ready()) return;
             Thread.Sleep(25);
         } while (DateTime.UtcNow < deadline);
-        throw new TimeoutException("WPF view did not reach its expected state.");
+        throw new TimeoutException($"Timed out waiting for {description}.");
     }
 }

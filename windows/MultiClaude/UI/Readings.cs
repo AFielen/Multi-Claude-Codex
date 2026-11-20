@@ -17,9 +17,18 @@ public partial class MainWindow
     private Dictionary<string, ResourceReading> resourceReadings = [];
     private event Action? IndicatorsChanged;
 
+    private void RefreshAfterTrayRestore()
+    {
+        RenderStatus();
+        UpdateRowIndicators();
+        UpdateUsageDisplay();
+        StartStatusRead();
+        RequestUsage(true);
+    }
+
     private async void RequestUsage(bool force)
     {
-        if (selected is not { } profile || closed || (!force && usageRead != null)) return;
+        if (selected is not { } profile || closed || !IsVisible || (!force && usageRead != null)) return;
         usageRead?.Cancel();
         usageGeneration++;
         using var pending = new CancellationTokenSource();
@@ -29,7 +38,7 @@ public partial class MainWindow
         {
             var reading = profile is { Provider: ProfileProvider.Claude, Isolated: true }
                 ? await Task.Run(() => Usage.Read(profile, token), token) : null;
-            if (usageRead != pending || token.IsCancellationRequested || closed) return;
+            if (usageRead != pending || token.IsCancellationRequested || closed || !IsVisible) return;
             snapshot = reading;
             usageFailed = false;
             if (reading != null) limits[profile.CodeKey] = (reading.FiveHour, reading.SevenDay);
@@ -39,10 +48,10 @@ public partial class MainWindow
             try { size = await Task.Run(() => Usage.FolderSize(catalog, profile, token), token); }
             catch (Exception error) when (error is not OperationCanceledException)
             {
-                if (usageRead == pending && !closed) DataSize.Text = T("folder_size") + "   —";
+                if (usageRead == pending && !closed && IsVisible && !token.IsCancellationRequested) DataSize.Text = T("folder_size") + "   —";
                 return;
             }
-            if (usageRead != pending || token.IsCancellationRequested || closed) return;
+            if (usageRead != pending || token.IsCancellationRequested || closed || !IsVisible) return;
             var gib = size.Bytes >= 1024L * 1024 * 1024;
             DataSize.Text = T("folder_size") + "   " + (size.Partial ? "≥ " : "") +
                 (size.Bytes / (gib ? 1073741824d : 1048576d)).ToString("N1") + (gib ? " GiB" : " MiB");
@@ -50,7 +59,7 @@ public partial class MainWindow
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception)
         {
-            if (usageRead != pending || closed) return;
+            if (usageRead != pending || token.IsCancellationRequested || closed || !IsVisible) return;
             usageFailed = true;
             UpdateUsageDisplay();
         }
@@ -65,7 +74,7 @@ public partial class MainWindow
     }
     private void UpdateUsageDisplay()
     {
-        if (selected is not { Provider: ProfileProvider.Claude } p || OverviewTab == null) return;
+        if (!IsVisible || selected is not { Provider: ProfileProvider.Claude } p || OverviewTab == null) return;
         var now = DateTimeOffset.UtcNow;
         var stale = snapshot?.Observed is { } observed && (now - observed).TotalMinutes > 15;
         var capture = snapshot?.Capture == true;
@@ -113,11 +122,19 @@ public partial class MainWindow
         readingStatus = true;
         var batch = profiles.ToArray();
         var generation = usageGeneration;
+        bool readDetails = IsVisible;
         try
         {
-            if (profile == null)
+            if (!readDetails || profile == null)
             {
-                await Task.Run(integration.PruneWindowIcons);
+                var running = await Task.Run(() =>
+                {
+                    integration.PruneWindowIcons();
+                    return batch.Select(p => (p.CodeKey, Open: integration.IsRunning(p))).ToArray();
+                });
+                if (!closed)
+                    foreach (var row in running)
+                        status[row.CodeKey] = (row.Open, status.GetValueOrDefault(row.CodeKey).Signed);
                 return;
             }
             var (updates, readings) = await Task.Run(() =>
@@ -153,7 +170,7 @@ public partial class MainWindow
         }
         catch (Exception)
         {
-            if (!closed)
+            if (readDetails && !closed && IsVisible)
             {
                 resourceReadings.Clear();
                 RenderStatus();
@@ -164,7 +181,8 @@ public partial class MainWindow
         finally
         {
             readingStatus = false;
-            if (!closed && selected != null && selected.CodeKey != profile?.CodeKey) StartStatusRead();
+            if (!closed && selected != null && (selected.CodeKey != profile?.CodeKey || !readDetails && IsVisible))
+                StartStatusRead();
         }
     }
     private (string Mark, string Caption, Brush Ink) Indicator(Profile p)
@@ -188,6 +206,7 @@ public partial class MainWindow
 
     private void UpdateRowIndicators()
     {
+        if (!IsVisible) return;
         foreach (var p in profiles)
         {
             if (!rowIndicators.TryGetValue(p.CodeKey, out var row)) continue;
@@ -202,7 +221,7 @@ public partial class MainWindow
     }
     private void RenderStatus()
     {
-        if (selected is not { } p) return;
+        if (!IsVisible || selected is not { } p) return;
         SetResourceText(ProfileResources, p);
         bool known = status.TryGetValue(p.CodeKey, out var state);
         var waiting = loginProfile?.CodeKey == p.CodeKey;

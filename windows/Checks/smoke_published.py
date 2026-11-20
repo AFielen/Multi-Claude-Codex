@@ -10,31 +10,54 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-import time
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPOSITORY), str(REPOSITORY / "recursos")]
 from smoke_profile_workflow import RECORDER, wait_for
 
 
-def window_for(pid, owned=False):
+def process_windows(pid):
     found = []
     enum = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
     @enum
     def window(hwnd, _):
         current = wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(current))
-        title = ctypes.create_unicode_buffer(256)
-        ctypes.windll.user32.GetWindowTextW(hwnd, title, len(title))
-        has_owner = bool(ctypes.windll.user32.GetWindow(wintypes.HWND(hwnd), 4))
-        if (current.value == pid and has_owner == owned and
-                (owned or title.value.startswith("Multi Claude")) and ctypes.windll.user32.IsWindowVisible(hwnd)):
+        ctypes.windll.user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(current))
+        if current.value == pid:
             found.append(hwnd)
         return True
 
     ctypes.windll.user32.EnumWindows(window, 0)
-    return found[0] if found else None
+    return found
+
+
+def window_for(pid, owned=False):
+    for handle in process_windows(pid):
+        hwnd = wintypes.HWND(handle)
+        title = ctypes.create_unicode_buffer(256)
+        ctypes.windll.user32.GetWindowTextW(hwnd, title, len(title))
+        has_owner = bool(ctypes.windll.user32.GetWindow(hwnd, 4))
+        if (has_owner == owned and (owned or title.value.startswith("Multi Claude"))
+                and ctypes.windll.user32.IsWindowVisible(hwnd)):
+            return handle
+    return None
+
+
+def hide_with_close(manager, handle):
+    hwnd = wintypes.HWND(handle)
+    assert ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+    wait_for(manager, lambda: ctypes.windll.user32.IsWindow(hwnd) and not ctypes.windll.user32.IsWindowVisible(hwnd),
+             "the manager to hide while retaining its window")
+
+
+def end_fixture_session(manager):
+    # Simulate Windows logoff only for top-level windows belonging to this test process.
+    for handle in process_windows(manager.pid):
+        hwnd = wintypes.HWND(handle)
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0011, 0, 0)  # WM_QUERYENDSESSION
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0016, 1, 0)  # WM_ENDSESSION
+    assert manager.wait(timeout=20) == 0
 
 
 def main():
@@ -91,13 +114,15 @@ def main():
                     return db.execute("SELECT valor FROM config WHERE chave='idioma'").fetchone()
             wait_for(blank,accepted,"persisted first-run language")
             hwnd = wait_for(blank,lambda:window_for(blank.pid),"empty portable workspace")
-            ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd),0x10,0,0)
-            assert blank.wait(timeout=20)==0
+            hide_with_close(blank, hwnd)
+            subprocess.run([str(portable / app.name)], cwd=root, env=blank_env, check=True, timeout=20)
+            wait_for(blank, lambda: window_for(blank.pid) == hwnd, "a second launch to restore the same window")
+            end_fixture_session(blank)
         finally:
             if blank.poll() is None:
                 blank.kill()
                 blank.wait()
-        print("PASS clean portable EXE created its own empty catalog and saved first-run settings.", flush=True)
+        print("PASS portable catalog, first-run language, close to tray and restore on a second launch.", flush=True)
         seen = set()
         for cycle in (1, 2):
             # On the second start the shortcut itself opens the first profile from a stopped manager.
@@ -106,6 +131,7 @@ def main():
             manager = subprocess.Popen(args, cwd=root)
             try:
                 hwnd=wait_for(manager, lambda: window_for(manager.pid), f"WPF window on start {cycle}")
+                hide_with_close(manager, hwnd)
                 for identifier, path, key in reversed(original):
                     if key != cold_key:
                         secondary = subprocess.Popen([str(app),"--open-profile",key,"--manager-home",str(home)], cwd=root,
@@ -121,8 +147,7 @@ def main():
                     code=home/"claude-code"/key
                     expected=["wpf","manager",f"--user-data-dir={home / path}",str(code),str(code/"anthropic")]
                     assert note.read_text(encoding="utf-8-sig").splitlines()==expected
-                ctypes.windll.user32.PostMessageW(wintypes.HWND(hwnd),0x10,0,0)
-                assert manager.wait(timeout=20)==0
+                end_fixture_session(manager)
             finally:
                 if manager.poll() is None: manager.kill(); manager.wait()
             with contextlib.closing(sqlite3.connect(home/"perfis.db")) as con:
@@ -130,7 +155,7 @@ def main():
                 assert con.execute("SELECT count(*) FROM profile_options WHERE last_open IS NOT NULL").fetchone()==(2,)
                 assert con.execute("SELECT count(*) FROM config WHERE chave IN (?, ?, ?)", ("login_pasta","login_ok","login_url")).fetchone()==(0,)
             assert not (root/"unused").exists()
-            print(f"PASS published WPF run {cycle}: both shortcuts opened their original Desktop and Code paths.", flush=True)
+            print(f"PASS published WPF run {cycle}: shortcuts reached the hidden manager with original profile paths.", flush=True)
 
 
 if __name__ == "__main__":

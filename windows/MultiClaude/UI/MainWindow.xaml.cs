@@ -35,19 +35,23 @@ public partial class MainWindow : Window
         language = catalog.Get("idioma") ?? CultureInfo.CurrentUICulture.TwoLetterISOLanguageName;
         Theme.Apply(catalog.Get("tema") ?? "sistema");
         InitializeComponent();
+        ManagerMenu = CreateManagerMenu();
         DataContext = new Captions(language);
         SourceInitialized += (_, _) =>
         {
             RestoreGeometry();
             bindings = new ProfileBindings(this, id => Safe(() => ActivateById(id)));
+            InitializeManagerTray();
         };
-        Loaded += (_, _) =>
+        Loaded += FirstLoad;
+        void FirstLoad(object sender, RoutedEventArgs args)
         {
+            Loaded -= FirstLoad;
             Reload(catalog.Get("selected_code_key"));
             pulse.Start();
             if (catalog.Get("idioma") is null)
                 Dispatcher.BeginInvoke(() => { if (!closed) Welcome(); }, DispatcherPriority.ApplicationIdle);
-        };
+        }
         pulse.Tick += (_, _) =>
         {
             if (!ModalOpen && pendingActivations.TryDequeue(out var key)) ActivateProfile(key);
@@ -57,7 +61,7 @@ public partial class MainWindow : Window
                 Feedback.Text = T("esgotado");
             }
             StartStatusRead();
-            if (selected == null) return;
+            if (!IsVisible || selected == null) return;
             UpdateUsageDisplay();
             if (DateTimeOffset.UtcNow >= nextUsage && usageRead == null) RequestUsage(false);
         };
@@ -67,6 +71,7 @@ public partial class MainWindow : Window
             pulse.Stop();
             usageRead?.Cancel();
             bindings?.Dispose();
+            DisposeManagerTray();
             integration.Dispose();
             SaveGeometry();
         };
@@ -85,8 +90,11 @@ public partial class MainWindow : Window
         try { action(); }
         catch (Exception error) { Error(this, error); }
     }
-    private void Error(Window owner, Exception error) =>
+    private void Error(Window owner, Exception error)
+    {
+        if (owner == this && !IsVisible && !closed) ShowManager();
         MessageBox.Show(owner, error.Message, T("erro"), MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
     private bool Confirm(string title, string message) =>
         MessageBox.Show(this, message, title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
 
@@ -182,9 +190,13 @@ public partial class MainWindow : Window
     {
         if (closed) return;
         if (ModalOpen) { pendingActivations.Enqueue(codeKey); return; }
-        Safe(() => { var profile = catalog.Profiles().FirstOrDefault(p => p.CodeKey == codeKey); if (profile != null) { Reload(profile.CodeKey); OpenSelected(); } });
+        Safe(() =>
+        {
+            if (Catalog.FindInExisting(catalog.Home, codeKey) == null) return;
+            Reload(codeKey);
+            if (selected?.CodeKey == codeKey) OpenSelected();
+        });
     }
-    private bool ModalOpen => !IsEnabled || OwnedWindows.Cast<Window>().Any(w => w.IsVisible);
     private void ActivateById(long id)
     {
         if (closed) return;
