@@ -10,6 +10,29 @@ internal static class DialogChecks
 {
     public static void Run(MainWindow window)
     {
+        var settings = (Button)window.FindName("SettingsButton");
+        void ChangeLanguage(string currentLabel, string nextCode, string nextLabel)
+        {
+            WithDialog(window, settings, dialog =>
+            {
+                var picker = Find<ComboBox>(dialog, "Language");
+                CheckVisibleLabel(currentLabel);
+                picker.SelectedItem = picker.Items.Cast<ComboBoxItem>().Single(item => Equals(item.Tag, nextCode));
+                CheckVisibleLabel(nextLabel);
+                Click(Find<Button>(dialog, "SaveSettings"));
+
+                void CheckVisibleLabel(string label)
+                {
+                    picker.UpdateLayout();
+                    if (!VisualChildren(picker).OfType<TextBlock>().Any(t => t.IsVisible && t.ActualWidth > 0 && t.Text == label))
+                        throw new Exception($"Language picker did not display '{label}' when collapsed.");
+                }
+            });
+        }
+        ChangeLanguage("Deutsch", "fr", "Français");
+        ChangeLanguage("Français", "de", "Deutsch");
+        Console.WriteLine("PASS settings display the selected language before and after saving");
+
         var selectedName = (TextBlock)window.FindName("SelectedName");
         string original = selectedName.Text;
         void SaveName(string next)
@@ -77,15 +100,18 @@ internal static class DialogChecks
     }
 
     private static T Find<T>(DependencyObject root, string id) where T : FrameworkElement
+        => VisualChildren(root).OfType<T>().FirstOrDefault(item => AutomationProperties.GetAutomationId(item) == id)
+            ?? throw new Exception("Missing dialog control " + id);
+
+    private static IEnumerable<DependencyObject> VisualChildren(DependencyObject root)
     {
         var stack = new Stack<DependencyObject>();
         stack.Push(root);
         while (stack.TryPop(out var current))
         {
-            if (current is T item && AutomationProperties.GetAutomationId(item) == id) return item;
+            yield return current;
             for (int i = 0; i < VisualTreeHelper.GetChildrenCount(current); i++)
                 stack.Push(VisualTreeHelper.GetChild(current, i));
         }
-        throw new Exception("Missing dialog control " + id);
     }
 }

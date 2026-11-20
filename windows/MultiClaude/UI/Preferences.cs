@@ -16,7 +16,7 @@ public partial class MainWindow
 
     private ComboBox LanguagePicker(Panel panel)
     {
-        var combo = new ComboBox { DisplayMemberPath = "Content", MinWidth = 150, HorizontalAlignment = HorizontalAlignment.Left };
+        var combo = new ComboBox { MinWidth = 150, HorizontalAlignment = HorizontalAlignment.Left };
         Identify(combo, "Language", T("idioma"));
         foreach (var (key, name) in Languages)
         {
